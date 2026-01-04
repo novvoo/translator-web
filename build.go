@@ -26,7 +26,7 @@ func build() error {
 
 	// 2. 复制前端文件到 backend
 	fmt.Println("\n📋 复制前端构建文件...")
-	if err := copyFrontendToBacked(); err != nil {
+	if err := copyFrontendToBackend(); err != nil {
 		return fmt.Errorf("复制前端文件失败: %w", err)
 	}
 

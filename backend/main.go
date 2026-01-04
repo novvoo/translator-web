@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+//go:embed all:frontend/build
 var frontendFS embed.FS
 
 func main() {
@@ -45,13 +46,25 @@ func main() {
 	} else {
 		// 生产模式：使用内嵌的前端文件
 		log.Println("📦 生产模式：使用内嵌前端文件")
-		buildFS, err := fs.Sub(frontendFS, "frontend/build")
-		if err != nil {
-			log.Println("⚠️  警告：前端文件未找到，请先运行 'go run build.go' 构建前端")
-			log.Println("    或使用开发模式：DEV_MODE=true go run main.go")
-			panic(err)
+
+		// 尝试读取嵌入的文件系统
+		entries, err := fs.ReadDir(frontendFS, ".")
+		if err != nil || len(entries) == 0 {
+			log.Println("⚠️  警告：前端文件未找到")
+			r.NoRoute(func(c *gin.Context) {
+				c.String(http.StatusNotFound, "Frontend not built. Please run 'go run build.go' first or set DEV_MODE=true")
+			})
+		} else {
+			buildFS, err := fs.Sub(frontendFS, "frontend/build")
+			if err != nil {
+				log.Printf("⚠️  错误：无法访问前端文件: %v\n", err)
+				r.NoRoute(func(c *gin.Context) {
+					c.String(http.StatusNotFound, "Frontend files error: "+err.Error())
+				})
+			} else {
+				r.NoRoute(gin.WrapH(http.FileServer(http.FS(buildFS))))
+			}
 		}
-		r.NoRoute(gin.WrapH(http.FileServer(http.FS(buildFS))))
 	}
 
 	log.Println("🚀 EPUB Translator 服务器启动在 http://localhost:8080")
