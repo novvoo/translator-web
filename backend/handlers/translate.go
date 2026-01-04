@@ -106,7 +106,7 @@ func TranslateHandler(c *gin.Context) {
 	taskMutex.Unlock()
 
 	// 保存上传文件
-	uploadDir := "uploads"
+	uploadDir := "data/uploads"
 	os.MkdirAll(uploadDir, 0755)
 	sourcePath := filepath.Join(uploadDir, taskID+".epub")
 	if err := c.SaveUploadedFile(file, sourcePath); err != nil {
@@ -307,7 +307,7 @@ func processTranslation(taskID, sourcePath string, req models.TranslateRequest) 
 
 	// 保存翻译后的 EPUB
 	log.Printf("[任务 %s] 保存翻译后的 EPUB", taskID)
-	outputDir := "outputs"
+	outputDir := "data/outputs"
 	os.MkdirAll(outputDir, 0755)
 	outputPath := filepath.Join(outputDir, taskID+".epub")
 
