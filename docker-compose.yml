@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  epub-translator:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./uploads:/root/uploads
+      - ./outputs:/root/outputs
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped

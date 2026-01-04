@@ -1,0 +1,33 @@
+app = "epub-translator-web"
+primary_region = "lax"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+
+  [services.concurrency]
+    hard_limit = 250
+    soft_limit = 200
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.tcp_checks]]
+    interval = 10000
+    timeout = 2000
+
+[[mounts]]
+  source = "epub_data"
+  destination = "/root/uploads"
+
+[[mounts]]
+  source = "epub_outputs"
+  destination = "/root/outputs"

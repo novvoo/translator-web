@@ -1,0 +1,3 @@
+@echo off
+echo Starting EPUB Translator Web...
+go run dev.go

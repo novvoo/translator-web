@@ -1,0 +1,66 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+README.md
+LICENSE
+*.md
+
+# Backend temporary files
+backend/cache/
+backend/uploads/
+backend/outputs/
+backend/frontend/
+
+# Frontend
+frontend/node_modules/
+frontend/build/
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Environment variables (keep .env.example)
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+*.zip
+*.tar.gz
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Development files
+dev.go
+Makefile
+
+# Docker
+docker-compose.yml
+Dockerfile
+.dockerignore

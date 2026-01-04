@@ -1,0 +1,514 @@
+package translator
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+)
+
+// ProviderType AI 提供商类型
+type ProviderType string
+
+const (
+	ProviderOpenAI   ProviderType = "openai"
+	ProviderClaude   ProviderType = "claude"
+	ProviderGemini   ProviderType = "gemini"
+	ProviderCustom   ProviderType = "custom"
+	ProviderOllama   ProviderType = "ollama"
+	ProviderDeepSeek ProviderType = "deepseek"
+)
+
+// Provider AI 提供商接口
+type Provider interface {
+	Translate(text, targetLanguage, userPrompt string) (string, error)
+	GetName() string
+}
+
+// ProviderConfig 提供商配置
+type ProviderConfig struct {
+	Type        ProviderType      `json:"type"`
+	APIKey      string            `json:"apiKey"`
+	APIURL      string            `json:"apiUrl"`
+	Model       string            `json:"model"`
+	Temperature float64           `json:"temperature"`
+	MaxTokens   int               `json:"maxTokens"`
+	Extra       map[string]string `json:"extra,omitempty"` // 额外参数
+}
+
+// BaseProvider 基础提供商实现
+type BaseProvider struct {
+	Config     ProviderConfig
+	HTTPClient *http.Client
+	Cache      *Cache
+}
+
+// NewProvider 创建提供商实例
+func NewProvider(config ProviderConfig, cache *Cache) (Provider, error) {
+	base := &BaseProvider{
+		Config: config,
+		HTTPClient: &http.Client{
+			Timeout: 60 * time.Second,
+		},
+		Cache: cache,
+	}
+
+	switch config.Type {
+	case ProviderOpenAI, ProviderDeepSeek:
+		return &OpenAIProvider{BaseProvider: base}, nil
+	case ProviderClaude:
+		return &ClaudeProvider{BaseProvider: base}, nil
+	case ProviderGemini:
+		return &GeminiProvider{BaseProvider: base}, nil
+	case ProviderOllama:
+		return &OllamaProvider{BaseProvider: base}, nil
+	case ProviderCustom:
+		return &CustomProvider{BaseProvider: base}, nil
+	default:
+		return nil, fmt.Errorf("不支持的提供商类型: %s", config.Type)
+	}
+}
+
+// doRequest 执行 HTTP 请求
+func (b *BaseProvider) doRequest(req *http.Request) ([]byte, error) {
+	resp, err := b.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("API 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API 返回错误 (状态码 %d): %s", resp.StatusCode, string(body))
+	}
+
+	return body, nil
+}
+
+// checkCache 检查缓存
+func (b *BaseProvider) checkCache(text, targetLanguage, userPrompt string) (string, bool) {
+	if b.Cache != nil {
+		cacheKey := CacheKey(text, targetLanguage, userPrompt)
+		if cached, ok := b.Cache.Get(cacheKey); ok {
+			return cached, true
+		}
+	}
+	return "", false
+}
+
+// saveCache 保存到缓存
+func (b *BaseProvider) saveCache(text, targetLanguage, userPrompt, result string) {
+	if b.Cache != nil {
+		cacheKey := CacheKey(text, targetLanguage, userPrompt)
+		b.Cache.Set(cacheKey, result)
+	}
+}
+
+// OpenAIProvider OpenAI 兼容的提供商（包括 OpenAI、DeepSeek 等）
+type OpenAIProvider struct {
+	*BaseProvider
+}
+
+func (p *OpenAIProvider) GetName() string {
+	return string(p.Config.Type)
+}
+
+func (p *OpenAIProvider) Translate(text, targetLanguage, userPrompt string) (string, error) {
+	// 检查缓存
+	if cached, ok := p.checkCache(text, targetLanguage, userPrompt); ok {
+		return cached, nil
+	}
+
+	systemPrompt := fmt.Sprintf("You are a professional translator. Translate the following text to %s. Keep the original meaning and style. Only return the translated text without any explanations.", targetLanguage)
+	if userPrompt != "" {
+		systemPrompt += " " + userPrompt
+	}
+
+	reqBody := map[string]interface{}{
+		"model":       p.Config.Model,
+		"temperature": p.Config.Temperature,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": text},
+		},
+	}
+
+	if p.Config.MaxTokens > 0 {
+		reqBody["max_tokens"] = p.Config.MaxTokens
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", p.Config.APIURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.Config.APIKey)
+
+	body, err := p.doRequest(req)
+	if err != nil {
+		return "", err
+	}
+
+	var resp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error,omitempty"`
+	}
+
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("解析响应失败: %w", err)
+	}
+
+	if resp.Error != nil {
+		return "", fmt.Errorf("API 错误: %s", resp.Error.Message)
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("API 未返回翻译结果")
+	}
+
+	result := resp.Choices[0].Message.Content
+	p.saveCache(text, targetLanguage, userPrompt, result)
+	return result, nil
+}
+
+// ClaudeProvider Anthropic Claude 提供商
+type ClaudeProvider struct {
+	*BaseProvider
+}
+
+func (p *ClaudeProvider) GetName() string {
+	return "claude"
+}
+
+func (p *ClaudeProvider) Translate(text, targetLanguage, userPrompt string) (string, error) {
+	// 检查缓存
+	if cached, ok := p.checkCache(text, targetLanguage, userPrompt); ok {
+		return cached, nil
+	}
+
+	systemPrompt := fmt.Sprintf("You are a professional translator. Translate the following text to %s. Keep the original meaning and style. Only return the translated text without any explanations.", targetLanguage)
+	if userPrompt != "" {
+		systemPrompt += " " + userPrompt
+	}
+
+	reqBody := map[string]interface{}{
+		"model":       p.Config.Model,
+		"max_tokens":  p.Config.MaxTokens,
+		"temperature": p.Config.Temperature,
+		"system":      systemPrompt,
+		"messages": []map[string]string{
+			{"role": "user", "content": text},
+		},
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", p.Config.APIURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", p.Config.APIKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	body, err := p.doRequest(req)
+	if err != nil {
+		return "", err
+	}
+
+	var resp struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error,omitempty"`
+	}
+
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("解析响应失败: %w", err)
+	}
+
+	if resp.Error != nil {
+		return "", fmt.Errorf("API 错误: %s", resp.Error.Message)
+	}
+
+	if len(resp.Content) == 0 {
+		return "", fmt.Errorf("API 未返回翻译结果")
+	}
+
+	result := resp.Content[0].Text
+	p.saveCache(text, targetLanguage, userPrompt, result)
+	return result, nil
+}
+
+// GeminiProvider Google Gemini 提供商
+type GeminiProvider struct {
+	*BaseProvider
+}
+
+func (p *GeminiProvider) GetName() string {
+	return "gemini"
+}
+
+func (p *GeminiProvider) Translate(text, targetLanguage, userPrompt string) (string, error) {
+	// 检查缓存
+	if cached, ok := p.checkCache(text, targetLanguage, userPrompt); ok {
+		return cached, nil
+	}
+
+	systemPrompt := fmt.Sprintf("You are a professional translator. Translate the following text to %s. Keep the original meaning and style. Only return the translated text without any explanations.", targetLanguage)
+	if userPrompt != "" {
+		systemPrompt += " " + userPrompt
+	}
+
+	fullPrompt := systemPrompt + "\n\n" + text
+
+	reqBody := map[string]interface{}{
+		"contents": []map[string]interface{}{
+			{
+				"parts": []map[string]string{
+					{"text": fullPrompt},
+				},
+			},
+		},
+		"generationConfig": map[string]interface{}{
+			"temperature": p.Config.Temperature,
+		},
+	}
+
+	if p.Config.MaxTokens > 0 {
+		reqBody["generationConfig"].(map[string]interface{})["maxOutputTokens"] = p.Config.MaxTokens
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	// Gemini API URL 格式: https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={apiKey}
+	apiURL := fmt.Sprintf("%s?key=%s", p.Config.APIURL, p.Config.APIKey)
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	body, err := p.doRequest(req)
+	if err != nil {
+		return "", err
+	}
+
+	var resp struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error,omitempty"`
+	}
+
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("解析响应失败: %w", err)
+	}
+
+	if resp.Error != nil {
+		return "", fmt.Errorf("API 错误: %s", resp.Error.Message)
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("API 未返回翻译结果")
+	}
+
+	result := resp.Candidates[0].Content.Parts[0].Text
+	p.saveCache(text, targetLanguage, userPrompt, result)
+	return result, nil
+}
+
+// OllamaProvider Ollama 本地模型提供商
+type OllamaProvider struct {
+	*BaseProvider
+}
+
+func (p *OllamaProvider) GetName() string {
+	return "ollama"
+}
+
+func (p *OllamaProvider) Translate(text, targetLanguage, userPrompt string) (string, error) {
+	// 检查缓存
+	if cached, ok := p.checkCache(text, targetLanguage, userPrompt); ok {
+		return cached, nil
+	}
+
+	systemPrompt := fmt.Sprintf("You are a professional translator. Translate the following text to %s. Keep the original meaning and style. Only return the translated text without any explanations.", targetLanguage)
+	if userPrompt != "" {
+		systemPrompt += " " + userPrompt
+	}
+
+	reqBody := map[string]interface{}{
+		"model":  p.Config.Model,
+		"prompt": systemPrompt + "\n\n" + text,
+		"stream": false,
+		"options": map[string]interface{}{
+			"temperature": p.Config.Temperature,
+		},
+	}
+
+	if p.Config.MaxTokens > 0 {
+		reqBody["options"].(map[string]interface{})["num_predict"] = p.Config.MaxTokens
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", p.Config.APIURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	body, err := p.doRequest(req)
+	if err != nil {
+		return "", err
+	}
+
+	var resp struct {
+		Response string `json:"response"`
+		Error    string `json:"error,omitempty"`
+	}
+
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("解析响应失败: %w", err)
+	}
+
+	if resp.Error != "" {
+		return "", fmt.Errorf("API 错误: %s", resp.Error)
+	}
+
+	if resp.Response == "" {
+		return "", fmt.Errorf("API 未返回翻译结果")
+	}
+
+	result := resp.Response
+	p.saveCache(text, targetLanguage, userPrompt, result)
+	return result, nil
+}
+
+// CustomProvider 自定义 API 提供商
+type CustomProvider struct {
+	*BaseProvider
+}
+
+func (p *CustomProvider) GetName() string {
+	return "custom"
+}
+
+func (p *CustomProvider) Translate(text, targetLanguage, userPrompt string) (string, error) {
+	// 检查缓存
+	if cached, ok := p.checkCache(text, targetLanguage, userPrompt); ok {
+		return cached, nil
+	}
+
+	systemPrompt := fmt.Sprintf("You are a professional translator. Translate the following text to %s. Keep the original meaning and style. Only return the translated text without any explanations.", targetLanguage)
+	if userPrompt != "" {
+		systemPrompt += " " + userPrompt
+	}
+
+	// 自定义提供商使用 OpenAI 兼容格式作为默认
+	reqBody := map[string]interface{}{
+		"model":       p.Config.Model,
+		"temperature": p.Config.Temperature,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": text},
+		},
+	}
+
+	if p.Config.MaxTokens > 0 {
+		reqBody["max_tokens"] = p.Config.MaxTokens
+	}
+
+	// 添加额外参数
+	for k, v := range p.Config.Extra {
+		reqBody[k] = v
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", p.Config.APIURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if p.Config.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.Config.APIKey)
+	}
+
+	body, err := p.doRequest(req)
+	if err != nil {
+		return "", err
+	}
+
+	// 尝试解析 OpenAI 格式
+	var resp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error,omitempty"`
+	}
+
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("解析响应失败: %w", err)
+	}
+
+	if resp.Error != nil {
+		return "", fmt.Errorf("API 错误: %s", resp.Error.Message)
+	}
+
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("API 未返回翻译结果")
+	}
+
+	result := resp.Choices[0].Message.Content
+	p.saveCache(text, targetLanguage, userPrompt, result)
+	return result, nil
+}
