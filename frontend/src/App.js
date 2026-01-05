@@ -66,6 +66,7 @@ function App() {
     { value: 'gemini', label: 'Google Gemini', defaultUrl: 'https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent', defaultModel: 'gemini-pro' },
     { value: 'deepseek', label: 'DeepSeek', defaultUrl: 'https://api.deepseek.com/v1/chat/completions', defaultModel: 'deepseek-chat' },
     { value: 'ollama', label: 'Ollama (本地)', defaultUrl: 'http://localhost:11434/api/generate', defaultModel: 'llama2' },
+    { value: 'nltranslator', label: 'NLTranslator (Apple 翻译)', defaultUrl: 'http://localhost:8080/translate', defaultModel: '', noApiKey: true, modelOptional: true },
     { value: 'custom', label: '自定义 API', defaultUrl: '', defaultModel: '', modelOptional: true },
   ];
 
@@ -185,7 +186,8 @@ function App() {
       setError('请选择文件');
       return;
     }
-    if (provider !== 'ollama' && !apiKey) {
+    const currentProvider = providers.find(p => p.value === provider);
+    if (!currentProvider?.noApiKey && provider !== 'ollama' && !apiKey) {
       setError('请输入 API Key');
       return;
     }
@@ -355,39 +357,43 @@ function App() {
             </FormControl>
           </Grid>
 
-          <Grid item xs={12} md={6}>
-            <TextField
-              fullWidth
-              label="模型"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder={providers.find(p => p.value === provider)?.defaultModel || ''}
-              helperText="例如: gpt-4, claude-3-5-sonnet, gemini-pro"
-            />
-          </Grid>
+          {provider !== 'nltranslator' && (
+            <>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="模型"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder={providers.find(p => p.value === provider)?.defaultModel || ''}
+                  helperText="例如: gpt-4, claude-3-5-sonnet, gemini-pro"
+                />
+              </Grid>
 
-          <Grid item xs={12} md={6}>
-            <TextField
-              fullWidth
-              label="Temperature"
-              type="number"
-              value={temperature}
-              onChange={(e) => setTemperature(parseFloat(e.target.value))}
-              inputProps={{ min: 0, max: 2, step: 0.1 }}
-              helperText="控制翻译的创造性 (0-2)"
-            />
-          </Grid>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Temperature"
+                  type="number"
+                  value={temperature}
+                  onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                  inputProps={{ min: 0, max: 2, step: 0.1 }}
+                  helperText="控制翻译的创造性 (0-2)"
+                />
+              </Grid>
+            </>
+          )}
 
           <Grid item xs={12}>
             <TextField
               fullWidth
-              label={provider === 'ollama' ? 'API Key (可选)' : 'API Key'}
+              label={provider === 'ollama' || provider === 'nltranslator' ? 'API Key (可选)' : 'API Key'}
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder={provider === 'ollama' ? '本地模型无需 API Key' : 'sk-...'}
-              required={provider !== 'ollama'}
-              helperText={provider === 'ollama' ? 'Ollama 本地模型无需 API Key' : ''}
+              placeholder={provider === 'ollama' || provider === 'nltranslator' ? '本地服务无需 API Key' : 'sk-...'}
+              required={provider !== 'ollama' && provider !== 'nltranslator'}
+              helperText={provider === 'ollama' || provider === 'nltranslator' ? '本地服务无需 API Key' : ''}
             />
           </Grid>
 
@@ -398,20 +404,23 @@ function App() {
               value={apiUrl}
               onChange={(e) => setApiUrl(e.target.value)}
               placeholder="https://api.openai.com/v1/chat/completions"
+              helperText={provider === 'nltranslator' ? 'NLTranslator Proxy 服务地址（需要先启动 NLTranslatorProxy）' : ''}
             />
           </Grid>
 
-          <Grid item xs={12}>
-            <TextField
-              fullWidth
-              label="自定义提示词（可选）"
-              value={userPrompt}
-              onChange={(e) => setUserPrompt(e.target.value)}
-              placeholder="例如：使用正式语言，保留技术术语"
-              multiline
-              rows={2}
-            />
-          </Grid>
+          {provider !== 'nltranslator' && (
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="自定义提示词（可选）"
+                value={userPrompt}
+                onChange={(e) => setUserPrompt(e.target.value)}
+                placeholder="例如：使用正式语言，保留技术术语"
+                multiline
+                rows={2}
+              />
+            </Grid>
+          )}
 
           <Grid item xs={12}>
             <FormControlLabel
@@ -443,7 +452,7 @@ function App() {
               size="large"
               fullWidth
               onClick={handleUpload}
-              disabled={!file || (provider !== 'ollama' && !apiKey) || uploading}
+              disabled={!file || (!providers.find(p => p.value === provider)?.noApiKey && provider !== 'ollama' && !apiKey) || uploading}
               startIcon={<CloudUpload />}
             >
               {uploading ? '上传中...' : (forceRetranslate ? '开始重新翻译' : '开始翻译')}
