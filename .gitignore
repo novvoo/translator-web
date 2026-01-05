@@ -23,6 +23,12 @@ backend/uploads/
 backend/outputs/
 backend/frontend/
 
+# User data (session-isolated)
+data/users/
+data/uploads/
+data/outputs/
+data/cache/
+
 # Frontend
 frontend/node_modules/
 frontend/build/

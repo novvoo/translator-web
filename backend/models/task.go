@@ -4,6 +4,7 @@ import "time"
 
 type TranslateTask struct {
 	ID             string    `json:"id"`
+	SessionID      string    `json:"-"` // 不返回给前端
 	SourceFile     string    `json:"sourceFile"`
 	TargetLanguage string    `json:"targetLanguage"`
 	Status         string    `json:"status"` // pending, processing, completed, failed

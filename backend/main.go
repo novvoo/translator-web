@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"epub-translator-web/handlers"
+	"epub-translator-web/middleware"
 	"io/fs"
 	"log"
 	"net/http"
@@ -21,6 +22,9 @@ func main() {
 
 	// 设置最大上传文件大小 (100MB)
 	r.MaxMultipartMemory = 100 << 20
+
+	// 应用会话中间件到所有路由
+	r.Use(middleware.SessionMiddleware())
 
 	// API 路由
 	api := r.Group("/api")
@@ -68,5 +72,6 @@ func main() {
 	}
 
 	log.Println("🚀 EPUB Translator 服务器启动在 http://localhost:8080")
+	log.Println("✅ 会话隔离已启用 - 每个用户的任务和文件完全独立")
 	r.Run(":8080")
 }

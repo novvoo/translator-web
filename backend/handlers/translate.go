@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"epub-translator-web/middleware"
 	"epub-translator-web/models"
 	"epub-translator-web/translator"
 	"fmt"
@@ -16,13 +17,82 @@ import (
 	"github.com/google/uuid"
 )
 
-var (
-	tasks     = make(map[string]*models.TranslateTask)
-	taskMutex sync.RWMutex
-)
+// TaskManager 管理所有用户的任务
+type TaskManager struct {
+	// sessionID -> taskID -> task
+	userTasks map[string]map[string]*models.TranslateTask
+	mu        sync.RWMutex
+}
+
+var taskManager *TaskManager
+
+func init() {
+	taskManager = &TaskManager{
+		userTasks: make(map[string]map[string]*models.TranslateTask),
+	}
+}
+
+// AddTask 为用户添加任务
+func (tm *TaskManager) AddTask(sessionID string, task *models.TranslateTask) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	if tm.userTasks[sessionID] == nil {
+		tm.userTasks[sessionID] = make(map[string]*models.TranslateTask)
+	}
+	tm.userTasks[sessionID][task.ID] = task
+}
+
+// GetTask 获取用户的特定任务
+func (tm *TaskManager) GetTask(sessionID, taskID string) (*models.TranslateTask, bool) {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+
+	if userTasks, exists := tm.userTasks[sessionID]; exists {
+		task, found := userTasks[taskID]
+		return task, found
+	}
+	return nil, false
+}
+
+// GetUserTasks 获取用户的所有任务
+func (tm *TaskManager) GetUserTasks(sessionID string) []*models.TranslateTask {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+
+	userTasks, exists := tm.userTasks[sessionID]
+	if !exists {
+		return []*models.TranslateTask{}
+	}
+
+	tasks := make([]*models.TranslateTask, 0, len(userTasks))
+	for _, task := range userTasks {
+		tasks = append(tasks, task)
+	}
+	return tasks
+}
+
+// UpdateTask 更新任务（用于更新进度等）
+func (tm *TaskManager) UpdateTask(sessionID, taskID string, updateFn func(*models.TranslateTask)) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	if userTasks, exists := tm.userTasks[sessionID]; exists {
+		if task, found := userTasks[taskID]; found {
+			updateFn(task)
+		}
+	}
+}
 
 // TranslateHandler 处理翻译请求
 func TranslateHandler(c *gin.Context) {
+	// 获取会话 ID
+	sessionID := middleware.GetSessionID(c)
+	if sessionID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的会话"})
+		return
+	}
+
 	// 解析表单
 	file, err := c.FormFile("file")
 	if err != nil {
@@ -94,6 +164,7 @@ func TranslateHandler(c *gin.Context) {
 	taskID := uuid.New().String()
 	task := &models.TranslateTask{
 		ID:             taskID,
+		SessionID:      sessionID,
 		SourceFile:     file.Filename,
 		TargetLanguage: req.TargetLanguage,
 		Status:         "pending",
@@ -101,23 +172,26 @@ func TranslateHandler(c *gin.Context) {
 		CreatedAt:      time.Now(),
 	}
 
-	taskMutex.Lock()
-	tasks[taskID] = task
-	taskMutex.Unlock()
+	// 添加到任务管理器
+	taskManager.AddTask(sessionID, task)
 
-	// 保存上传文件
-	uploadDir := "data/uploads"
+	// 为用户创建独立的目录
+	userDir := filepath.Join("data", "users", sessionID)
+	uploadDir := filepath.Join(userDir, "uploads")
 	os.MkdirAll(uploadDir, 0755)
+
 	sourcePath := filepath.Join(uploadDir, taskID+".epub")
 	if err := c.SaveUploadedFile(file, sourcePath); err != nil {
-		task.Status = "failed"
-		task.Error = "保存文件失败: " + err.Error()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": task.Error})
+		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+			t.Status = "failed"
+			t.Error = "保存文件失败: " + err.Error()
+		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存文件失败: " + err.Error()})
 		return
 	}
 
 	// 启动后台翻译任务
-	go processTranslation(taskID, sourcePath, req)
+	go processTranslation(sessionID, taskID, sourcePath, req)
 
 	c.JSON(http.StatusOK, gin.H{
 		"taskId":  taskID,
@@ -126,43 +200,45 @@ func TranslateHandler(c *gin.Context) {
 }
 
 // processTranslation 处理翻译任务
-func processTranslation(taskID, sourcePath string, req models.TranslateRequest) {
-	taskMutex.Lock()
-	task := tasks[taskID]
-	task.Status = "processing"
-	taskMutex.Unlock()
+func processTranslation(sessionID, taskID, sourcePath string, req models.TranslateRequest) {
+	taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+		t.Status = "processing"
+	})
 
-	log.Printf("[任务 %s] 开始处理翻译", taskID)
+	log.Printf("[会话 %s][任务 %s] 开始处理翻译", sessionID[:8], taskID)
 
 	defer func() {
 		if r := recover(); r != nil {
-			taskMutex.Lock()
-			task.Status = "failed"
-			task.Error = fmt.Sprintf("翻译过程出错: %v", r)
-			taskMutex.Unlock()
-			log.Printf("[任务 %s] 翻译失败（panic）: %v", taskID, r)
+			taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+				t.Status = "failed"
+				t.Error = fmt.Sprintf("翻译过程出错: %v", r)
+			})
+			log.Printf("[会话 %s][任务 %s] 翻译失败（panic）: %v", sessionID[:8], taskID, r)
 		}
 	}()
 
 	// 打开 EPUB 文件
-	log.Printf("[任务 %s] 打开 EPUB 文件: %s", taskID, sourcePath)
+	log.Printf("[会话 %s][任务 %s] 打开 EPUB 文件: %s", sessionID[:8], taskID, sourcePath)
 	epub, err := translator.OpenEPUB(sourcePath)
 	if err != nil {
-		taskMutex.Lock()
-		task.Status = "failed"
-		task.Error = "打开 EPUB 文件失败: " + err.Error()
-		taskMutex.Unlock()
-		log.Printf("[任务 %s] 打开文件失败: %v", taskID, err)
+		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+			t.Status = "failed"
+			t.Error = "打开 EPUB 文件失败: " + err.Error()
+		})
+		log.Printf("[会话 %s][任务 %s] 打开文件失败: %v", sessionID[:8], taskID, err)
 		return
 	}
 
-	// 创建翻译客户端
-	log.Printf("[任务 %s] 创建翻译客户端，提供商: %s, 模型: %s", taskID, req.LLMConfig.Provider, req.LLMConfig.Model)
-	cache, _ := translator.NewCache("cache")
+	// 为每个用户创建独立的缓存目录
+	userCacheDir := filepath.Join("data", "users", sessionID, "cache")
+	os.MkdirAll(userCacheDir, 0755)
+
+	log.Printf("[会话 %s][任务 %s] 创建翻译客户端，提供商: %s, 模型: %s", sessionID[:8], taskID, req.LLMConfig.Provider, req.LLMConfig.Model)
+	cache, _ := translator.NewCache(userCacheDir)
 
 	// 如果强制重新翻译，禁用缓存读取（但仍然写入缓存）
 	if req.ForceRetranslate {
-		log.Printf("[任务 %s] 强制重新翻译模式：将忽略现有缓存", taskID)
+		log.Printf("[会话 %s][任务 %s] 强制重新翻译模式：将忽略现有缓存", sessionID[:8], taskID)
 		cache.DisableCache()
 	}
 
@@ -178,29 +254,29 @@ func processTranslation(taskID, sourcePath string, req models.TranslateRequest) 
 
 	llm, err := translator.NewTranslatorClient(providerConfig, cache)
 	if err != nil {
-		taskMutex.Lock()
-		task.Status = "failed"
-		task.Error = "创建翻译客户端失败: " + err.Error()
-		taskMutex.Unlock()
-		log.Printf("[任务 %s] 创建客户端失败: %v", taskID, err)
+		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+			t.Status = "failed"
+			t.Error = "创建翻译客户端失败: " + err.Error()
+		})
+		log.Printf("[会话 %s][任务 %s] 创建客户端失败: %v", sessionID[:8], taskID, err)
 		return
 	}
 	llm.WithRetry(5, 2*time.Second)
 
 	// 获取所有 HTML 文件
 	htmlFiles := epub.GetHTMLFiles()
-	log.Printf("[任务 %s] 找到 %d 个 HTML 文件", taskID, len(htmlFiles))
+	log.Printf("[会话 %s][任务 %s] 找到 %d 个 HTML 文件", sessionID[:8], taskID, len(htmlFiles))
 	if len(htmlFiles) == 0 {
-		taskMutex.Lock()
-		task.Status = "failed"
-		task.Error = "EPUB 文件中没有找到内容"
-		taskMutex.Unlock()
-		log.Printf("[任务 %s] 没有找到 HTML 文件", taskID)
+		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+			t.Status = "failed"
+			t.Error = "EPUB 文件中没有找到内容"
+		})
+		log.Printf("[会话 %s][任务 %s] 没有找到 HTML 文件", sessionID[:8], taskID)
 		return
 	}
 
 	// 翻译目录（TOC）
-	log.Printf("[任务 %s] 翻译目录", taskID)
+	log.Printf("[会话 %s][任务 %s] 翻译目录", sessionID[:8], taskID)
 	toc, _ := translator.ParseTOC(epub)
 	if toc != nil {
 		translator.TranslateTOC(toc, llm, req.TargetLanguage, req.UserPrompt, cache)
@@ -208,42 +284,42 @@ func processTranslation(taskID, sourcePath string, req models.TranslateRequest) 
 	}
 
 	// 翻译元数据
-	log.Printf("[任务 %s] 翻译元数据", taskID)
+	log.Printf("[会话 %s][任务 %s] 翻译元数据", sessionID[:8], taskID)
 	translator.TranslateMetadata(epub, llm, req.TargetLanguage, req.UserPrompt, cache)
 
 	// 翻译每个 HTML 文件
 	totalFiles := len(htmlFiles)
-	log.Printf("[任务 %s] 开始翻译 %d 个 HTML 文件", taskID, totalFiles)
+	log.Printf("[会话 %s][任务 %s] 开始翻译 %d 个 HTML 文件", sessionID[:8], taskID, totalFiles)
 
 	for i, filename := range htmlFiles {
-		log.Printf("[任务 %s] 翻译文件 %d/%d: %s", taskID, i+1, totalFiles, filename)
+		log.Printf("[会话 %s][任务 %s] 翻译文件 %d/%d: %s", sessionID[:8], taskID, i+1, totalFiles, filename)
 
 		// 解析 HTML
 		content := epub.Files[filename]
 		htmlContent, err := translator.ParseHTML(content)
 		if err != nil {
-			log.Printf("[任务 %s] 跳过文件 %s: 解析失败 - %v", taskID, filename, err)
+			log.Printf("[会话 %s][任务 %s] 跳过文件 %s: 解析失败 - %v", sessionID[:8], taskID, filename, err)
 			// 更新进度（跳过的文件也算完成）
 			progress := float64(i+1) / float64(totalFiles)
-			taskMutex.Lock()
-			task.Progress = progress
-			taskMutex.Unlock()
+			taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+				t.Progress = progress
+			})
 			continue
 		}
 
 		// 提取文本块
 		textBlocks := translator.ExtractTextBlocks(htmlContent.Body)
 		if len(textBlocks) == 0 {
-			log.Printf("[任务 %s] 跳过文件 %s: 没有文本内容", taskID, filename)
+			log.Printf("[会话 %s][任务 %s] 跳过文件 %s: 没有文本内容", sessionID[:8], taskID, filename)
 			// 更新进度（跳过的文件也算完成）
 			progress := float64(i+1) / float64(totalFiles)
-			taskMutex.Lock()
-			task.Progress = progress
-			taskMutex.Unlock()
+			taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+				t.Progress = progress
+			})
 			continue
 		}
 
-		log.Printf("[任务 %s] 文件 %s 包含 %d 个文本块", taskID, filename, len(textBlocks))
+		log.Printf("[会话 %s][任务 %s] 文件 %s 包含 %d 个文本块", sessionID[:8], taskID, filename, len(textBlocks))
 
 		// 翻译文本块（带进度更新）
 		translations := make([]string, len(textBlocks))
@@ -255,11 +331,11 @@ func processTranslation(taskID, sourcePath string, req models.TranslateRequest) 
 
 			translated, err := llm.Translate(text, req.TargetLanguage, req.UserPrompt)
 			if err != nil {
-				taskMutex.Lock()
-				task.Status = "failed"
-				task.Error = fmt.Sprintf("翻译 %s 第 %d 段失败: %s", filename, j+1, err.Error())
-				taskMutex.Unlock()
-				log.Printf("[任务 %s] 翻译失败: %v", taskID, err)
+				taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+					t.Status = "failed"
+					t.Error = fmt.Sprintf("翻译 %s 第 %d 段失败: %s", filename, j+1, err.Error())
+				})
+				log.Printf("[会话 %s][任务 %s] 翻译失败: %v", sessionID[:8], taskID, err)
 				return
 			}
 			translations[j] = translated
@@ -267,12 +343,12 @@ func processTranslation(taskID, sourcePath string, req models.TranslateRequest) 
 			// 更新细粒度进度：当前文件内的进度 + 已完成文件的进度
 			fileProgress := float64(j+1) / float64(len(textBlocks))
 			totalProgress := (float64(i) + fileProgress) / float64(totalFiles)
-			taskMutex.Lock()
-			task.Progress = totalProgress
-			taskMutex.Unlock()
+			taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+				t.Progress = totalProgress
+			})
 
-			log.Printf("[任务 %s] 文件 %d/%d, 文本块 %d/%d (总进度: %.1f%%)",
-				taskID, i+1, totalFiles, j+1, len(textBlocks), totalProgress*100)
+			log.Printf("[会话 %s][任务 %s] 文件 %d/%d, 文本块 %d/%d (总进度: %.1f%%)",
+				sessionID[:8], taskID, i+1, totalFiles, j+1, len(textBlocks), totalProgress*100)
 
 			// 避免请求过快
 			time.Sleep(100 * time.Millisecond)
@@ -305,42 +381,45 @@ func processTranslation(taskID, sourcePath string, req models.TranslateRequest) 
 		epub.Files[filename] = []byte(newContent)
 	}
 
-	// 保存翻译后的 EPUB
-	log.Printf("[任务 %s] 保存翻译后的 EPUB", taskID)
-	outputDir := "data/outputs"
-	os.MkdirAll(outputDir, 0755)
-	outputPath := filepath.Join(outputDir, taskID+".epub")
+	// 保存翻译后的 EPUB 到用户目录
+	log.Printf("[会话 %s][任务 %s] 保存翻译后的 EPUB", sessionID[:8], taskID)
+	userOutputDir := filepath.Join("data", "users", sessionID, "outputs")
+	os.MkdirAll(userOutputDir, 0755)
+	outputPath := filepath.Join(userOutputDir, taskID+".epub")
 
 	if err := epub.SaveEPUB(outputPath); err != nil {
-		taskMutex.Lock()
-		task.Status = "failed"
-		task.Error = "保存翻译文件失败: " + err.Error()
-		taskMutex.Unlock()
-		log.Printf("[任务 %s] 保存失败: %v", taskID, err)
+		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+			t.Status = "failed"
+			t.Error = "保存翻译文件失败: " + err.Error()
+		})
+		log.Printf("[会话 %s][任务 %s] 保存失败: %v", sessionID[:8], taskID, err)
 		return
 	}
 
 	// 完成任务
-	taskMutex.Lock()
-	task.Status = "completed"
-	task.Progress = 1.0
-	task.CompletedAt = time.Now()
-	task.OutputPath = outputPath
-	taskMutex.Unlock()
+	taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+		t.Status = "completed"
+		t.Progress = 1.0
+		t.CompletedAt = time.Now()
+		t.OutputPath = outputPath
+	})
 
-	log.Printf("[任务 %s] 翻译完成！输出文件: %s", taskID, outputPath)
+	log.Printf("[会话 %s][任务 %s] 翻译完成！输出文件: %s", sessionID[:8], taskID, outputPath)
 }
 
 // GetStatusHandler 获取任务状态
 func GetStatusHandler(c *gin.Context) {
+	sessionID := middleware.GetSessionID(c)
+	if sessionID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的会话"})
+		return
+	}
+
 	taskID := c.Param("taskId")
 
-	taskMutex.RLock()
-	task, exists := tasks[taskID]
-	taskMutex.RUnlock()
-
+	task, exists := taskManager.GetTask(sessionID, taskID)
 	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在或无权访问"})
 		return
 	}
 
@@ -349,14 +428,17 @@ func GetStatusHandler(c *gin.Context) {
 
 // DownloadHandler 下载翻译后的文件
 func DownloadHandler(c *gin.Context) {
+	sessionID := middleware.GetSessionID(c)
+	if sessionID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的会话"})
+		return
+	}
+
 	taskID := c.Param("taskId")
 
-	taskMutex.RLock()
-	task, exists := tasks[taskID]
-	taskMutex.RUnlock()
-
+	task, exists := taskManager.GetTask(sessionID, taskID)
 	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在或无权访问"})
 		return
 	}
 
@@ -370,15 +452,15 @@ func DownloadHandler(c *gin.Context) {
 	c.FileAttachment(task.OutputPath, filename)
 }
 
-// GetTasksHandler 获取所有任务
+// GetTasksHandler 获取当前用户的所有任务
 func GetTasksHandler(c *gin.Context) {
-	taskMutex.RLock()
-	defer taskMutex.RUnlock()
-
-	taskList := make([]*models.TranslateTask, 0, len(tasks))
-	for _, task := range tasks {
-		taskList = append(taskList, task)
+	sessionID := middleware.GetSessionID(c)
+	if sessionID == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的会话"})
+		return
 	}
+
+	taskList := taskManager.GetUserTasks(sessionID)
 
 	c.JSON(http.StatusOK, gin.H{
 		"tasks": taskList,
