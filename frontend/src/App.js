@@ -56,7 +56,7 @@ function App() {
   const [error, setError] = useState('');
 
   const languages = [
-    'Chinese', 'English', 'Japanese', 'Korean', 'French', 
+    'Chinese', 'English', 'Japanese', 'Korean', 'French',
     'German', 'Spanish', 'Russian', 'Arabic', 'Portuguese'
   ];
 
@@ -65,8 +65,8 @@ function App() {
     { value: 'claude', label: 'Claude (Anthropic)', defaultUrl: 'https://api.anthropic.com/v1/messages', defaultModel: 'claude-3-5-sonnet-20241022' },
     { value: 'gemini', label: 'Google Gemini', defaultUrl: 'https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent', defaultModel: 'gemini-pro' },
     { value: 'deepseek', label: 'DeepSeek', defaultUrl: 'https://api.deepseek.com/v1/chat/completions', defaultModel: 'deepseek-chat' },
-    { value: 'ollama', label: 'Ollama (本地)', defaultUrl: 'http://localhost:11434/api/generate', defaultModel: 'llama2' },
-    { value: 'nltranslator', label: 'NLTranslator (Apple 翻译)', defaultUrl: 'http://localhost:8080/translate', defaultModel: '', noApiKey: true, modelOptional: true },
+    { value: 'ollama', label: 'Ollama (本地)', defaultUrl: 'http://localhost:11434/api/generate', defaultModel: 'llama2', noApiKey: true },
+    { value: 'nltranslator', label: 'NLTranslator (Apple 翻译)', defaultUrl: 'http://localhost:8765/translate', defaultModel: '', noApiKey: true, modelOptional: true },
     { value: 'custom', label: '自定义 API', defaultUrl: '', defaultModel: '', modelOptional: true },
   ];
 
@@ -105,9 +105,9 @@ function App() {
       const response = await axios.get('/api/tasks');
       const taskList = response.data.tasks || [];
       setTasks(taskList);
-      
+
       // 返回是否有活跃任务
-      return taskList.some(task => 
+      return taskList.some(task =>
         task.status === 'processing' || task.status === 'pending'
       );
     } catch (err) {
@@ -119,20 +119,20 @@ function App() {
   useEffect(() => {
     // 初始加载
     loadTasks();
-    
+
     // 动态刷新：有活跃任务时 2 秒刷新一次，否则 10 秒刷新一次
     let intervalId;
-    
+
     const scheduleNextRefresh = async () => {
       const hasActiveTasks = await loadTasks();
       const delay = hasActiveTasks ? 2000 : 10000; // 活跃任务 2 秒，否则 10 秒
-      
+
       intervalId = setTimeout(scheduleNextRefresh, delay);
     };
-    
+
     // 启动第一次刷新
     intervalId = setTimeout(scheduleNextRefresh, 2000);
-    
+
     return () => {
       if (intervalId) {
         clearTimeout(intervalId);
@@ -169,7 +169,7 @@ function App() {
       localStorage.removeItem('model');
       localStorage.removeItem('temperature');
       localStorage.removeItem('userPrompt');
-      
+
       // 重置为默认值
       setTargetLanguage('Chinese');
       setProvider('openai');
@@ -187,7 +187,7 @@ function App() {
       return;
     }
     const currentProvider = providers.find(p => p.value === provider);
-    if (!currentProvider?.noApiKey && provider !== 'ollama' && !apiKey) {
+    if (!currentProvider?.noApiKey && !apiKey) {
       setError('请输入 API Key');
       return;
     }
@@ -198,7 +198,7 @@ function App() {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('targetLanguage', targetLanguage);
-    
+
     // LLM 配置
     const llmConfig = {
       provider: provider,
@@ -208,7 +208,7 @@ function App() {
       temperature: temperature,
       maxTokens: 4000,
     };
-    
+
     formData.append('llmConfig', JSON.stringify(llmConfig));
     if (userPrompt) {
       formData.append('userPrompt', userPrompt);
@@ -221,7 +221,7 @@ function App() {
           'Content-Type': 'multipart/form-data',
         },
       });
-      
+
       setFile(null);
       setForceRetranslate(false); // 重置选项
       loadTasks();
@@ -237,7 +237,7 @@ function App() {
       const response = await axios.get(`/api/download/${taskId}`, {
         responseType: 'blob',
       });
-      
+
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
@@ -384,18 +384,19 @@ function App() {
             </>
           )}
 
-          <Grid item xs={12}>
-            <TextField
-              fullWidth
-              label={provider === 'ollama' || provider === 'nltranslator' ? 'API Key (可选)' : 'API Key'}
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={provider === 'ollama' || provider === 'nltranslator' ? '本地服务无需 API Key' : 'sk-...'}
-              required={provider !== 'ollama' && provider !== 'nltranslator'}
-              helperText={provider === 'ollama' || provider === 'nltranslator' ? '本地服务无需 API Key' : ''}
-            />
-          </Grid>
+          {!providers.find(p => p.value === provider)?.noApiKey && (
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
+                label="API Key"
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-..."
+                required
+              />
+            </Grid>
+          )}
 
           <Grid item xs={12}>
             <TextField
@@ -440,8 +441,8 @@ function App() {
               }
             />
             <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4 }}>
-              {forceRetranslate 
-                ? '⚠️ 将重新翻译所有内容，不使用已有缓存' 
+              {forceRetranslate
+                ? '⚠️ 将重新翻译所有内容，不使用已有缓存'
                 : '✓ 继续翻译模式：将使用已有缓存，只翻译未完成的部分'}
             </Typography>
           </Grid>
