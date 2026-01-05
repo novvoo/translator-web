@@ -13,12 +13,13 @@ import (
 type ProviderType string
 
 const (
-	ProviderOpenAI   ProviderType = "openai"
-	ProviderClaude   ProviderType = "claude"
-	ProviderGemini   ProviderType = "gemini"
-	ProviderCustom   ProviderType = "custom"
-	ProviderOllama   ProviderType = "ollama"
-	ProviderDeepSeek ProviderType = "deepseek"
+	ProviderOpenAI      ProviderType = "openai"
+	ProviderClaude      ProviderType = "claude"
+	ProviderGemini      ProviderType = "gemini"
+	ProviderCustom      ProviderType = "custom"
+	ProviderOllama      ProviderType = "ollama"
+	ProviderDeepSeek    ProviderType = "deepseek"
+	ProviderNLTranslate ProviderType = "nltranslate" // macOS NaturalLanguage 翻译
 )
 
 // Provider AI 提供商接口
@@ -64,6 +65,8 @@ func NewProvider(config ProviderConfig, cache *Cache) (Provider, error) {
 		return &GeminiProvider{BaseProvider: base}, nil
 	case ProviderOllama:
 		return &OllamaProvider{BaseProvider: base}, nil
+	case ProviderNLTranslate:
+		return &NLTranslateProvider{BaseProvider: base}, nil
 	case ProviderCustom:
 		return &CustomProvider{BaseProvider: base}, nil
 	default:
@@ -187,6 +190,104 @@ func (p *OpenAIProvider) Translate(text, targetLanguage, userPrompt string) (str
 	result := resp.Choices[0].Message.Content
 	p.saveCache(text, targetLanguage, userPrompt, result)
 	return result, nil
+}
+
+// NLTranslateProvider macOS NaturalLanguage 翻译提供商
+type NLTranslateProvider struct {
+	*BaseProvider
+}
+
+func (p *NLTranslateProvider) GetName() string {
+	return "nltranslate"
+}
+
+func (p *NLTranslateProvider) Translate(text, targetLanguage, userPrompt string) (string, error) {
+	// 检查缓存
+	if cached, ok := p.checkCache(text, targetLanguage, userPrompt); ok {
+		return cached, nil
+	}
+
+	// 映射目标语言到 NaturalLanguage 语言代码
+	targetLangCode := mapToNLLanguageCode(targetLanguage)
+
+	// 调用 NLTranslator Proxy API
+	reqBody := map[string]interface{}{
+		"text":           text,
+		"targetLanguage": targetLangCode,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", p.Config.APIURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	body, err := p.doRequest(req)
+	if err != nil {
+		return "", err
+	}
+
+	var resp struct {
+		TranslatedText string `json:"translatedText"`
+		Error          string `json:"error,omitempty"`
+	}
+
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("解析响应失败: %w", err)
+	}
+
+	if resp.Error != "" {
+		return "", fmt.Errorf("翻译错误: %s", resp.Error)
+	}
+
+	if resp.TranslatedText == "" {
+		return "", fmt.Errorf("API 未返回翻译结果")
+	}
+
+	result := resp.TranslatedText
+	p.saveCache(text, targetLanguage, userPrompt, result)
+	return result, nil
+}
+
+// mapToNLLanguageCode 将常见语言名称映射到 NaturalLanguage 语言代码
+func mapToNLLanguageCode(language string) string {
+	languageMap := map[string]string{
+		"Chinese":             "zh-Hans",
+		"Simplified Chinese":  "zh-Hans",
+		"简体中文":                "zh-Hans",
+		"中文":                  "zh-Hans",
+		"Traditional Chinese": "zh-Hant",
+		"繁体中文":                "zh-Hant",
+		"繁體中文":                "zh-Hant",
+		"English":             "en",
+		"英语":                  "en",
+		"英文":                  "en",
+		"Japanese":            "ja",
+		"日语":                  "ja",
+		"日文":                  "ja",
+		"Korean":              "ko",
+		"韩语":                  "ko",
+		"韓語":                  "ko",
+		"Spanish":             "es",
+		"西班牙语":                "es",
+		"French":              "fr",
+		"法语":                  "fr",
+		"German":              "de",
+		"德语":                  "de",
+	}
+
+	if code, ok := languageMap[language]; ok {
+		return code
+	}
+
+	// 如果已经是语言代码格式，直接返回
+	return language
 }
 
 // ClaudeProvider Anthropic Claude 提供商
