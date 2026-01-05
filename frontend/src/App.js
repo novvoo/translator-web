@@ -453,7 +453,7 @@ function App() {
               size="large"
               fullWidth
               onClick={handleUpload}
-              disabled={!file || (!providers.find(p => p.value === provider)?.noApiKey && provider !== 'ollama' && !apiKey) || uploading}
+              disabled={!file || uploading || (!providers.find(p => p.value === provider)?.noApiKey && !apiKey)}
               startIcon={<CloudUpload />}
             >
               {uploading ? '上传中...' : (forceRetranslate ? '开始重新翻译' : '开始翻译')}

@@ -19,7 +19,7 @@ const (
 	ProviderCustom      ProviderType = "custom"
 	ProviderOllama      ProviderType = "ollama"
 	ProviderDeepSeek    ProviderType = "deepseek"
-	ProviderNLTranslate ProviderType = "nltranslate" // macOS NaturalLanguage 翻译
+	ProviderNLTranslate ProviderType = "nltranslator" // macOS NaturalLanguage 翻译
 )
 
 // Provider AI 提供商接口
@@ -198,7 +198,7 @@ type NLTranslateProvider struct {
 }
 
 func (p *NLTranslateProvider) GetName() string {
-	return "nltranslate"
+	return "nltranslator"
 }
 
 func (p *NLTranslateProvider) Translate(text, targetLanguage, userPrompt string) (string, error) {

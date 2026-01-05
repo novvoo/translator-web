@@ -154,8 +154,11 @@ func TranslateHandler(c *gin.Context) {
 			req.LLMConfig.Model = "gpt-3.5-turbo"
 		}
 	}
-	// Ollama 本地模型可能不需要 API Key
-	if req.LLMConfig.Provider != "ollama" && req.LLMConfig.APIKey == "" {
+	// 本地模型（Ollama、NLTranslator 等）不需要 API Key
+	needsAPIKey := req.LLMConfig.Provider != "ollama" && 
+		req.LLMConfig.Provider != "nltranslator"
+	
+	if needsAPIKey && req.LLMConfig.APIKey == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "API Key 不能为空"})
 		return
 	}
