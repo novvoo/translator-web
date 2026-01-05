@@ -179,6 +179,7 @@ func ExtractTextBlocks(html string) []string {
 	var blocks []string
 	decoder := xml.NewDecoder(strings.NewReader(html))
 	var currentText strings.Builder
+	var inSpan bool
 
 	for {
 		token, err := decoder.Token()
@@ -191,6 +192,11 @@ func ExtractTextBlocks(html string) []string {
 		}
 
 		switch t := token.(type) {
+		case xml.StartElement:
+			// 检测 span 标签的开始
+			if t.Name.Local == "span" {
+				inSpan = true
+			}
 		case xml.CharData:
 			text := strings.TrimSpace(string(t))
 			if text != "" {
@@ -198,7 +204,15 @@ func ExtractTextBlocks(html string) []string {
 				currentText.WriteString(" ")
 			}
 		case xml.EndElement:
-			if isBlockElement(t.Name.Local) {
+			// span 标签结束时，如果有内容则作为一个独立的文本块
+			if t.Name.Local == "span" && inSpan {
+				if currentText.Len() > 0 {
+					blocks = append(blocks, strings.TrimSpace(currentText.String()))
+					currentText.Reset()
+				}
+				inSpan = false
+			} else if isBlockElement(t.Name.Local) {
+				// 块级元素结束时，如果还有未处理的文本，也添加进去
 				if currentText.Len() > 0 {
 					blocks = append(blocks, strings.TrimSpace(currentText.String()))
 					currentText.Reset()
@@ -257,6 +271,7 @@ func InsertTranslation(html string, translations map[string]string) string {
 	decoder := xml.NewDecoder(strings.NewReader(html))
 	var currentText strings.Builder
 	var depth int
+	var inSpan bool
 
 	for {
 		token, err := decoder.Token()
@@ -278,18 +293,38 @@ func InsertTranslation(html string, translations map[string]string) string {
 			buf.WriteString(">")
 			depth++
 
+			// 检测 span 标签
+			if t.Name.Local == "span" {
+				inSpan = true
+			}
+
 		case xml.EndElement:
-			// 在结束标签前插入翻译
-			if isBlockElement(t.Name.Local) && currentText.Len() > 0 {
+			// 在 span 结束标签后插入翻译
+			if t.Name.Local == "span" && inSpan && currentText.Len() > 0 {
 				original := strings.TrimSpace(currentText.String())
-				if trans, ok := translations[original]; ok {
-					buf.WriteString(fmt.Sprintf(`<div class="translation" style="color: #666; font-style: italic; margin-top: 0.5em;">%s</div>`, trans))
+				buf.WriteString("</")
+				buf.WriteString(t.Name.Local)
+				buf.WriteString(">")
+
+				// 在 span 后面添加翻译（使用 span 标签保持格式一致）
+				if trans, ok := translations[original]; ok && trans != "" {
+					buf.WriteString(fmt.Sprintf(`<span class="translation" style="color: #666; font-style: italic;"> [%s]</span>`, trans))
 				}
 				currentText.Reset()
+				inSpan = false
+			} else {
+				// 在块级元素结束标签前插入翻译
+				if isBlockElement(t.Name.Local) && currentText.Len() > 0 {
+					original := strings.TrimSpace(currentText.String())
+					if trans, ok := translations[original]; ok && trans != "" {
+						buf.WriteString(fmt.Sprintf(`<div class="translation" style="color: #666; font-style: italic; margin-top: 0.5em;">%s</div>`, trans))
+					}
+					currentText.Reset()
+				}
+				buf.WriteString("</")
+				buf.WriteString(t.Name.Local)
+				buf.WriteString(">")
 			}
-			buf.WriteString("</")
-			buf.WriteString(t.Name.Local)
-			buf.WriteString(">")
 			depth--
 
 		case xml.CharData:
