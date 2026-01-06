@@ -13,12 +13,12 @@ clean:
 	rm -rf backend/frontend/build
 	rm -rf frontend/build
 	rm -rf frontend/node_modules
-	rm -f epub-translator-web epub-translator-web.exe
+	rm -f translator-web translator-web.exe
 	rm -rf uploads outputs
 
 # Docker 构建
 docker-build:
-	docker build -t epub-translator-web .
+	docker build -t translator-web .
 
 # Docker 运行
 docker-run:

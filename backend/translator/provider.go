@@ -210,9 +210,19 @@ func (p *NLTranslateProvider) Translate(text, targetLanguage, userPrompt string)
 	// 映射目标语言到 NaturalLanguage 语言代码
 	targetLangCode := mapToNLLanguageCode(targetLanguage)
 
+	// 获取源语言，优先使用配置中的源语言
+	var sourceLangCode string
+	if p.Config.Extra != nil && p.Config.Extra["sourceLanguage"] != "" {
+		sourceLangCode = mapToNLLanguageCode(p.Config.Extra["sourceLanguage"])
+	} else {
+		// 自动检测源语言或使用默认值
+		sourceLangCode = detectSourceLanguage(text)
+	}
+
 	// 调用 NLTranslator Proxy API
 	reqBody := map[string]interface{}{
 		"text":           text,
+		"sourceLanguage": sourceLangCode,
 		"targetLanguage": targetLangCode,
 	}
 
@@ -612,4 +622,32 @@ func (p *CustomProvider) Translate(text, targetLanguage, userPrompt string) (str
 	result := resp.Choices[0].Message.Content
 	p.saveCache(text, targetLanguage, userPrompt, result)
 	return result, nil
+}
+
+// detectSourceLanguage 简单的源语言检测
+func detectSourceLanguage(text string) string {
+	// 简单的语言检测逻辑
+	// 检测中文字符
+	for _, r := range text {
+		if r >= 0x4e00 && r <= 0x9fff {
+			return "zh-Hans" // 中文
+		}
+	}
+
+	// 检测日文字符
+	for _, r := range text {
+		if (r >= 0x3040 && r <= 0x309f) || (r >= 0x30a0 && r <= 0x30ff) {
+			return "ja" // 日文
+		}
+	}
+
+	// 检测韩文字符
+	for _, r := range text {
+		if r >= 0xac00 && r <= 0xd7af {
+			return "ko" // 韩文
+		}
+	}
+
+	// 默认为英文
+	return "en"
 }

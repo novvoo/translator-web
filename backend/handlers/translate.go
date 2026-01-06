@@ -2,16 +2,17 @@ package handlers
 
 import (
 	"encoding/json"
-	"epub-translator-web/middleware"
-	"epub-translator-web/models"
-	"epub-translator-web/translator"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+	"translator-web/middleware"
+	"translator-web/models"
+	"translator-web/translator"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -101,8 +102,9 @@ func TranslateHandler(c *gin.Context) {
 	}
 
 	// 检查文件类型
-	if filepath.Ext(file.Filename) != ".epub" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "只支持 .epub 文件"})
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	if ext != ".epub" && ext != ".pdf" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "只支持 .epub 和 .pdf 文件"})
 		return
 	}
 
@@ -155,9 +157,9 @@ func TranslateHandler(c *gin.Context) {
 		}
 	}
 	// 本地模型（Ollama、NLTranslator 等）不需要 API Key
-	needsAPIKey := req.LLMConfig.Provider != "ollama" && 
+	needsAPIKey := req.LLMConfig.Provider != "ollama" &&
 		req.LLMConfig.Provider != "nltranslator"
-	
+
 	if needsAPIKey && req.LLMConfig.APIKey == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "API Key 不能为空"})
 		return
@@ -183,7 +185,8 @@ func TranslateHandler(c *gin.Context) {
 	uploadDir := filepath.Join(userDir, "uploads")
 	os.MkdirAll(uploadDir, 0755)
 
-	sourcePath := filepath.Join(uploadDir, taskID+".epub")
+	// 根据文件类型确定保存路径
+	sourcePath := filepath.Join(uploadDir, taskID+ext)
 	if err := c.SaveUploadedFile(file, sourcePath); err != nil {
 		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
 			t.Status = "failed"
@@ -220,18 +223,6 @@ func processTranslation(sessionID, taskID, sourcePath string, req models.Transla
 		}
 	}()
 
-	// 打开 EPUB 文件
-	log.Printf("[会话 %s][任务 %s] 打开 EPUB 文件: %s", sessionID[:8], taskID, sourcePath)
-	epub, err := translator.OpenEPUB(sourcePath)
-	if err != nil {
-		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
-			t.Status = "failed"
-			t.Error = "打开 EPUB 文件失败: " + err.Error()
-		})
-		log.Printf("[会话 %s][任务 %s] 打开文件失败: %v", sessionID[:8], taskID, err)
-		return
-	}
-
 	// 为每个用户创建独立的缓存目录
 	userCacheDir := filepath.Join("data", "users", sessionID, "cache")
 	os.MkdirAll(userCacheDir, 0755)
@@ -255,7 +246,8 @@ func processTranslation(sessionID, taskID, sourcePath string, req models.Transla
 		Extra:       req.LLMConfig.Extra,
 	}
 
-	llm, err := translator.NewTranslatorClient(providerConfig, cache)
+	// 创建统一文档翻译器
+	docTranslator, err := translator.NewDocumentTranslator(providerConfig, cache)
 	if err != nil {
 		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
 			t.Status = "failed"
@@ -264,142 +256,41 @@ func processTranslation(sessionID, taskID, sourcePath string, req models.Transla
 		log.Printf("[会话 %s][任务 %s] 创建客户端失败: %v", sessionID[:8], taskID, err)
 		return
 	}
-	llm.WithRetry(5, 2*time.Second)
 
-	// 获取所有 HTML 文件
-	htmlFiles := epub.GetHTMLFiles()
-	log.Printf("[会话 %s][任务 %s] 找到 %d 个 HTML 文件", sessionID[:8], taskID, len(htmlFiles))
-	if len(htmlFiles) == 0 {
-		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
-			t.Status = "failed"
-			t.Error = "EPUB 文件中没有找到内容"
-		})
-		log.Printf("[会话 %s][任务 %s] 没有找到 HTML 文件", sessionID[:8], taskID)
-		return
-	}
-
-	// 翻译目录（TOC）
-	log.Printf("[会话 %s][任务 %s] 翻译目录", sessionID[:8], taskID)
-	toc, _ := translator.ParseTOC(epub)
-	if toc != nil {
-		translator.TranslateTOC(toc, llm, req.TargetLanguage, req.UserPrompt, cache)
-		translator.WriteTOC(epub, toc)
-	}
-
-	// 翻译元数据
-	log.Printf("[会话 %s][任务 %s] 翻译元数据", sessionID[:8], taskID)
-	translator.TranslateMetadata(epub, llm, req.TargetLanguage, req.UserPrompt, cache)
-
-	// 翻译每个 HTML 文件
-	totalFiles := len(htmlFiles)
-	log.Printf("[会话 %s][任务 %s] 开始翻译 %d 个 HTML 文件", sessionID[:8], taskID, totalFiles)
-
-	for i, filename := range htmlFiles {
-		log.Printf("[会话 %s][任务 %s] 翻译文件 %d/%d: %s", sessionID[:8], taskID, i+1, totalFiles, filename)
-
-		// 解析 HTML
-		content := epub.Files[filename]
-		htmlContent, err := translator.ParseHTML(content)
-		if err != nil {
-			log.Printf("[会话 %s][任务 %s] 跳过文件 %s: 解析失败 - %v", sessionID[:8], taskID, filename, err)
-			// 更新进度（跳过的文件也算完成）
-			progress := float64(i+1) / float64(totalFiles)
-			taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
-				t.Progress = progress
-			})
-			continue
-		}
-
-		// 提取文本块
-		textBlocks := translator.ExtractTextBlocks(htmlContent.Body)
-		if len(textBlocks) == 0 {
-			log.Printf("[会话 %s][任务 %s] 跳过文件 %s: 没有文本内容", sessionID[:8], taskID, filename)
-			// 更新进度（跳过的文件也算完成）
-			progress := float64(i+1) / float64(totalFiles)
-			taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
-				t.Progress = progress
-			})
-			continue
-		}
-
-		log.Printf("[会话 %s][任务 %s] 文件 %s 包含 %d 个文本块", sessionID[:8], taskID, filename, len(textBlocks))
-
-		// 翻译文本块（带进度更新）
-		translations := make([]string, len(textBlocks))
-		for j, text := range textBlocks {
-			if text == "" {
-				translations[j] = ""
-				continue
-			}
-
-			translated, err := llm.Translate(text, req.TargetLanguage, req.UserPrompt)
-			if err != nil {
-				taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
-					t.Status = "failed"
-					t.Error = fmt.Sprintf("翻译 %s 第 %d 段失败: %s", filename, j+1, err.Error())
-				})
-				log.Printf("[会话 %s][任务 %s] 翻译失败: %v", sessionID[:8], taskID, err)
-				return
-			}
-			translations[j] = translated
-
-			// 更新细粒度进度：当前文件内的进度 + 已完成文件的进度
-			fileProgress := float64(j+1) / float64(len(textBlocks))
-			totalProgress := (float64(i) + fileProgress) / float64(totalFiles)
-			taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
-				t.Progress = totalProgress
-			})
-
-			log.Printf("[会话 %s][任务 %s] 文件 %d/%d, 文本块 %d/%d (总进度: %.1f%%)",
-				sessionID[:8], taskID, i+1, totalFiles, j+1, len(textBlocks), totalProgress*100)
-
-			// 避免请求过快
-			time.Sleep(100 * time.Millisecond)
-		}
-
-		// 创建翻译映射
-		translationMap := make(map[string]string)
-		for j, block := range textBlocks {
-			translationMap[block] = translations[j]
-		}
-
-		// 插入翻译
-		translatedHTML := translator.InsertTranslation(htmlContent.Body, translationMap)
-
-		// 更新 EPUB 文件内容
-		originalContent := string(content)
-		bodyStart := 0
-		bodyEnd := len(originalContent)
-
-		if idx := []byte(originalContent); len(idx) > 0 {
-			if start := findBodyStart(originalContent); start != -1 {
-				bodyStart = start
-			}
-			if end := findBodyEnd(originalContent); end != -1 {
-				bodyEnd = end
-			}
-		}
-
-		newContent := originalContent[:bodyStart] + translatedHTML + originalContent[bodyEnd:]
-		epub.Files[filename] = []byte(newContent)
-	}
-
-	// 保存翻译后的 EPUB 到用户目录
-	log.Printf("[会话 %s][任务 %s] 保存翻译后的 EPUB", sessionID[:8], taskID)
+	// 确定输出路径
 	userOutputDir := filepath.Join("data", "users", sessionID, "outputs")
 	os.MkdirAll(userOutputDir, 0755)
-	outputPath := filepath.Join(userOutputDir, taskID+".epub")
 
-	if err := epub.SaveEPUB(outputPath); err != nil {
+	ext := strings.ToLower(filepath.Ext(sourcePath))
+	var outputPath string
+	if ext == ".pdf" {
+		// PDF 默认输出为 HTML 文件（更好的格式）
+		outputPath = filepath.Join(userOutputDir, taskID+".html")
+	} else {
+		// EPUB 保持原格式
+		outputPath = filepath.Join(userOutputDir, taskID+ext)
+	}
+
+	// 进度回调函数
+	progressCallback := func(progress float64) {
+		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+			t.Progress = progress
+		})
+	}
+
+	// 执行翻译
+	log.Printf("[会话 %s][任务 %s] 开始翻译文档: %s", sessionID[:8], taskID, sourcePath)
+	err = docTranslator.TranslateDocument(sourcePath, outputPath, req.TargetLanguage, req.UserPrompt, progressCallback)
+	if err != nil {
 		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
 			t.Status = "failed"
-			t.Error = "保存翻译文件失败: " + err.Error()
+			t.Error = "翻译失败: " + err.Error()
 		})
-		log.Printf("[会话 %s][任务 %s] 保存失败: %v", sessionID[:8], taskID, err)
+		log.Printf("[会话 %s][任务 %s] 翻译失败: %v", sessionID[:8], taskID, err)
 		return
 	}
 
-	// 完成任务
+	// 翻译完成
 	taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
 		t.Status = "completed"
 		t.Progress = 1.0
@@ -407,7 +298,7 @@ func processTranslation(sessionID, taskID, sourcePath string, req models.Transla
 		t.OutputPath = outputPath
 	})
 
-	log.Printf("[会话 %s][任务 %s] 翻译完成！输出文件: %s", sessionID[:8], taskID, outputPath)
+	log.Printf("[会话 %s][任务 %s] 翻译完成: %s", sessionID[:8], taskID, outputPath)
 }
 
 // GetStatusHandler 获取任务状态
@@ -450,8 +341,20 @@ func DownloadHandler(c *gin.Context) {
 		return
 	}
 
-	// 设置下载文件名（使用 FileAttachment 方法，它会正确设置 Content-Disposition）
-	filename := "translated_" + task.SourceFile
+	// 设置下载文件名（根据实际输出文件类型）
+	outputExt := strings.ToLower(filepath.Ext(task.OutputPath))
+	sourceExt := strings.ToLower(filepath.Ext(task.SourceFile))
+
+	var filename string
+	if sourceExt == ".pdf" && outputExt == ".html" {
+		// PDF 翻译输出为 HTML 格式
+		baseName := strings.TrimSuffix(task.SourceFile, filepath.Ext(task.SourceFile))
+		filename = "translated_" + baseName + ".html"
+	} else {
+		// 其他情况保持原扩展名
+		filename = "translated_" + task.SourceFile
+	}
+
 	c.FileAttachment(task.OutputPath, filename)
 }
 

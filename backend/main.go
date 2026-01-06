@@ -2,14 +2,14 @@ package main
 
 import (
 	"embed"
-	"epub-translator-web/handlers"
-	"epub-translator-web/middleware"
 	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"translator-web/handlers"
+	"translator-web/middleware"
 
 	"github.com/gin-gonic/gin"
 )
@@ -71,7 +71,7 @@ func main() {
 		}
 	}
 
-	log.Println("🚀 EPUB Translator 服务器启动在 http://localhost:8080")
+	log.Println("🚀 文档翻译器服务器启动在 http://localhost:8080")
 	log.Println("✅ 会话隔离已启用 - 每个用户的任务和文件完全独立")
 	r.Run(":8080")
 }

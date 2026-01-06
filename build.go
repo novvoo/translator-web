@@ -14,7 +14,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "构建失败: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("\n✓ 构建完成！运行 ./apikeyprobe 启动服务器")
+	fmt.Println("\n✓ 构建完成！运行 ./translator-web 启动服务器")
 }
 
 func build() error {
@@ -78,7 +78,7 @@ func copyFrontendToBackend() error {
 }
 
 func buildBackend() error {
-	outputName := "epub-translator-web"
+	outputName := "translator-web"
 	if runtime.GOOS == "windows" {
 		outputName += ".exe"
 	}

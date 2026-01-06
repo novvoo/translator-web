@@ -337,3 +337,77 @@ func InsertTranslation(html string, translations map[string]string) string {
 
 	return buf.String()
 }
+
+// GetTextBlocks 获取文本块（实现 Document 接口）
+func (e *EPUBFile) GetTextBlocks() []string {
+	var allBlocks []string
+
+	htmlFiles := e.GetHTMLFiles()
+	for _, filename := range htmlFiles {
+		content := e.Files[filename]
+		htmlContent, err := ParseHTML(content)
+		if err != nil {
+			continue
+		}
+
+		blocks := ExtractTextBlocks(htmlContent.Body)
+		allBlocks = append(allBlocks, blocks...)
+	}
+
+	return allBlocks
+}
+
+// InsertTranslation 插入翻译（实现 Document 接口）
+func (e *EPUBFile) InsertTranslation(translations map[string]string) error {
+	htmlFiles := e.GetHTMLFiles()
+
+	for _, filename := range htmlFiles {
+		content := e.Files[filename]
+		htmlContent, err := ParseHTML(content)
+		if err != nil {
+			continue
+		}
+
+		// 插入翻译
+		translatedBody := InsertTranslation(htmlContent.Body, translations)
+
+		// 重新构建完整的 HTML
+		originalStr := string(content)
+		bodyStart := strings.Index(originalStr, "<body")
+		if bodyStart == -1 {
+			continue
+		}
+
+		bodyStartEnd := strings.Index(originalStr[bodyStart:], ">") + bodyStart + 1
+		bodyEnd := strings.Index(originalStr, "</body>")
+		if bodyEnd == -1 {
+			bodyEnd = len(originalStr)
+		}
+
+		newContent := originalStr[:bodyStartEnd] + translatedBody + originalStr[bodyEnd:]
+		e.Files[filename] = []byte(newContent)
+	}
+
+	return nil
+}
+
+// Save 保存文档（实现 Document 接口）
+func (e *EPUBFile) Save(outputPath string) error {
+	return e.SaveEPUB(outputPath)
+}
+
+// ValidateEPUB 验证是否为有效的 EPUB 文件
+func ValidateEPUB(filePath string) error {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	if ext != ".epub" {
+		return fmt.Errorf("文件必须是 EPUB 格式")
+	}
+
+	// 尝试打开文件验证格式
+	_, err := zip.OpenReader(filePath)
+	if err != nil {
+		return fmt.Errorf("无效的 EPUB 文件: %w", err)
+	}
+
+	return nil
+}

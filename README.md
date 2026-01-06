@@ -1,12 +1,16 @@
-# EPUB Translator Web
+# Document Translator Web
 
-基于 Go + React 的 EPUB 电子书翻译工具，使用 AI 生成双语对照版本。
+基于 Go + React 的文档翻译工具，使用 AI 生成双语对照版本。支持 EPUB 电子书和 PDF 文档。
 
-## 🎉 最新更新：会话隔离功能
+## 🎉 最新更新：PDF 支持
 
-**版本 2.0.0** 现已支持多用户同时使用！每个用户的翻译任务和文件完全独立、互不干扰。
+**版本 2.1.0** 现已支持 PDF 文档翻译！
 
 ### 新功能亮点
+- ✅ **PDF 文档支持** - 支持上传和翻译 PDF 文件
+- ✅ **统一处理接口** - EPUB 和 PDF 使用相同的翻译流程
+- ✅ **智能文本提取** - 自动提取 PDF 中的文本内容
+- ✅ **双语文本输出** - PDF 翻译结果保存为双语对照文本文件
 - ✅ **自动会话管理** - 无需注册登录，自动为每个访问者创建独立会话
 - ✅ **完全数据隔离** - 每个用户独立的任务列表、文件存储和翻译缓存
 - ✅ **安全权限控制** - 无法访问其他用户的任务和文件
@@ -21,7 +25,8 @@
 ## 功能特性
 
 - 📚 上传 EPUB 文件进行翻译
-- 🔒 **多用户会话隔离** - 每个用户的数据完全独立（新功能！）
+- 📄 上传 PDF 文件进行翻译（新功能！）
+- 🔒 **多用户会话隔离** - 每个用户的数据完全独立
 - 🤖 **支持多种 AI 提供商**：
   - OpenAI (GPT-4, GPT-3.5)
   - Claude (Anthropic)
@@ -32,8 +37,13 @@
 - 🌍 支持多种目标语言
 - 📊 实时显示翻译进度
 - 💾 自动缓存翻译结果
-- 📥 下载双语对照的 EPUB 文件
+- 📥 下载双语对照的 EPUB 文件或文本文件
 - ⚙️ 灵活的模型配置和参数调优
+
+## 支持的文件格式
+
+- **EPUB**: 电子书格式，输出双语对照的 EPUB 文件
+- **PDF**: 便携式文档格式，输出双语对照的文本文件
 
 ## 技术栈
 
@@ -84,8 +94,8 @@ go run dev.go
 **生产模式（构建单一可执行文件）:**
 ```bash
 go run build.go
-./epub-translator-web      # Linux/Mac
-epub-translator-web.exe    # Windows
+./translator-web      # Linux/Mac
+translator-web.exe    # Windows
 ```
 
 ### 方式三：使用 Make
@@ -109,7 +119,7 @@ docker-compose up -d
 
 ## 使用说明
 
-1. **上传 EPUB 文件**：点击"选择 EPUB 文件"按钮
+1. **上传文档文件**：点击"选择文档文件"按钮，支持 .epub 和 .pdf 格式
 2. **配置翻译参数**：
    - **选择 AI 提供商**：OpenAI、Claude、Gemini、DeepSeek、Ollama 或自定义
    - 选择目标语言
@@ -196,7 +206,7 @@ API Key: your-azure-key
 ## 项目结构
 
 ```
-epub-translator-web/
+translator-web/
 ├── backend/
 │   ├── main.go              # 主程序入口
 │   ├── handlers/            # API 处理器
@@ -315,13 +325,13 @@ flyctl deploy
 
 ```bash
 # 构建镜像
-docker build -t epub-translator-web .
+docker build -t translator-web .
 
 # 运行容器
 docker run -d -p 8080:8080 \
   -v $(pwd)/uploads:/root/uploads \
   -v $(pwd)/outputs:/root/outputs \
-  epub-translator-web
+  translator-web
 ```
 
 ### 传统服务器部署
@@ -331,10 +341,10 @@ docker run -d -p 8080:8080 \
 go run build.go
 
 # 复制可执行文件到服务器
-scp epub-translator-web user@server:/path/to/app/
+scp translator-web user@server:/path/to/app/
 
 # 在服务器上运行
-./epub-translator-web
+./translator-web
 ```
 
 ## 许可证

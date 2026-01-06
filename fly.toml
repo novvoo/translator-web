@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for epub-translator-web on 2026-01-04T18:35:37+08:00
+# fly.toml app configuration file generated for translator-web on 2026-01-04T18:35:37+08:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'epub-translator-web'
+app = 'translator-web'
 primary_region = 'lax'
 
 [build]

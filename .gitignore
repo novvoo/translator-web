@@ -18,7 +18,7 @@ go.work
 vendor/
 
 # Backend temporary files
-backend/cache/
+backend/data/
 backend/uploads/
 backend/outputs/
 backend/frontend/
@@ -72,3 +72,4 @@ build/
 tmp/
 temp/
 *.tmp
+*.exe

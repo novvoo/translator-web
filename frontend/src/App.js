@@ -42,8 +42,19 @@ function App() {
     }
   };
 
+  // 加载自定义API配置
+  const loadCustomConfig = () => {
+    try {
+      const saved = localStorage.getItem('customApiConfig');
+      return saved ? JSON.parse(saved) : { apiUrl: '', model: '', apiKey: '' };
+    } catch {
+      return { apiUrl: '', model: '', apiKey: '' };
+    }
+  };
+
   const [file, setFile] = useState(null);
   const [targetLanguage, setTargetLanguage] = useState(() => loadConfig('targetLanguage', 'Chinese'));
+  const [sourceLanguage, setSourceLanguage] = useState(() => loadConfig('sourceLanguage', 'English'));
   const [provider, setProvider] = useState(() => loadConfig('provider', 'openai'));
   const [apiKey, setApiKey] = useState(() => loadConfig('apiKey', ''));
   const [apiUrl, setApiUrl] = useState(() => loadConfig('apiUrl', 'https://api.openai.com/v1/chat/completions'));
@@ -54,6 +65,9 @@ function App() {
   const [tasks, setTasks] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
+  
+  // 自定义API配置状态
+  const [customApiConfig, setCustomApiConfig] = useState(() => loadCustomConfig());
 
   const languages = [
     'Chinese', 'English', 'Japanese', 'Korean', 'French',
@@ -74,6 +88,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem('targetLanguage', JSON.stringify(targetLanguage));
   }, [targetLanguage]);
+
+  useEffect(() => {
+    localStorage.setItem('sourceLanguage', JSON.stringify(sourceLanguage));
+  }, [sourceLanguage]);
 
   useEffect(() => {
     localStorage.setItem('provider', JSON.stringify(provider));
@@ -98,6 +116,11 @@ function App() {
   useEffect(() => {
     localStorage.setItem('userPrompt', JSON.stringify(userPrompt));
   }, [userPrompt]);
+
+  // 保存自定义API配置
+  useEffect(() => {
+    localStorage.setItem('customApiConfig', JSON.stringify(customApiConfig));
+  }, [customApiConfig]);
 
   // 加载任务列表
   const loadTasks = async () => {
@@ -125,13 +148,13 @@ function App() {
 
     const scheduleNextRefresh = async () => {
       const hasActiveTasks = await loadTasks();
-      const delay = hasActiveTasks ? 2000 : 10000; // 活跃任务 2 秒，否则 10 秒
+      const delay = hasActiveTasks ? 3000 : 15000; // 活跃任务 3 秒，否则 15 秒
 
       intervalId = setTimeout(scheduleNextRefresh, delay);
     };
 
     // 启动第一次刷新
-    intervalId = setTimeout(scheduleNextRefresh, 2000);
+    intervalId = setTimeout(scheduleNextRefresh, 3000);
 
     return () => {
       if (intervalId) {
@@ -142,19 +165,35 @@ function App() {
 
   const handleFileChange = (event) => {
     const selectedFile = event.target.files[0];
-    if (selectedFile && selectedFile.name.endsWith('.epub')) {
+    if (selectedFile && (selectedFile.name.endsWith('.epub') || selectedFile.name.endsWith('.pdf'))) {
       setFile(selectedFile);
       setError('');
     } else {
-      setError('请选择 .epub 文件');
+      setError('请选择 .epub 或 .pdf 文件');
       setFile(null);
     }
   };
 
   const handleProviderChange = (newProvider) => {
+    // 如果当前是自定义API，保存配置
+    if (provider === 'custom') {
+      setCustomApiConfig({
+        apiUrl: apiUrl,
+        model: model,
+        apiKey: apiKey
+      });
+    }
+    
     setProvider(newProvider);
     const providerConfig = providers.find(p => p.value === newProvider);
-    if (providerConfig) {
+    
+    if (newProvider === 'custom') {
+      // 切换到自定义API时，恢复保存的配置
+      setApiUrl(customApiConfig.apiUrl || '');
+      setModel(customApiConfig.model || '');
+      setApiKey(customApiConfig.apiKey || '');
+    } else if (providerConfig) {
+      // 切换到其他提供商时，使用默认配置
       setApiUrl(providerConfig.defaultUrl);
       setModel(providerConfig.defaultModel);
     }
@@ -163,21 +202,25 @@ function App() {
   const handleClearConfig = () => {
     if (window.confirm('确定要清除所有保存的配置吗？')) {
       localStorage.removeItem('targetLanguage');
+      localStorage.removeItem('sourceLanguage');
       localStorage.removeItem('provider');
       localStorage.removeItem('apiKey');
       localStorage.removeItem('apiUrl');
       localStorage.removeItem('model');
       localStorage.removeItem('temperature');
       localStorage.removeItem('userPrompt');
+      localStorage.removeItem('customApiConfig'); // 清除自定义API配置
 
       // 重置为默认值
       setTargetLanguage('Chinese');
+      setSourceLanguage('English');
       setProvider('openai');
       setApiKey('');
       setApiUrl('https://api.openai.com/v1/chat/completions');
       setModel('gpt-4');
       setTemperature(0.3);
       setUserPrompt('');
+      setCustomApiConfig({ apiUrl: '', model: '', apiKey: '' });
     }
   };
 
@@ -207,6 +250,7 @@ function App() {
       model: model,
       temperature: temperature,
       maxTokens: 4000,
+      extra: provider === 'nltranslator' ? { sourceLanguage: sourceLanguage } : {},
     };
 
     formData.append('llmConfig', JSON.stringify(llmConfig));
@@ -273,10 +317,10 @@ function App() {
     <Container maxWidth="lg" sx={{ py: 4 }}>
       <Box sx={{ mb: 4, textAlign: 'center' }}>
         <Typography variant="h3" component="h1" gutterBottom>
-          📚 EPUB Translator
+          📚 文档翻译器
         </Typography>
         <Typography variant="subtitle1" color="text.secondary">
-          使用 AI 翻译 EPUB 电子书，生成双语对照版本
+          使用 AI 翻译 EPUB 电子书和 PDF 文档，生成双语对照版本
         </Typography>
       </Box>
 
@@ -313,14 +357,19 @@ function App() {
               fullWidth
               sx={{ py: 2 }}
             >
-              {file ? file.name : '选择 EPUB 文件'}
+              {file ? file.name : '选择文档文件 (EPUB/PDF)'}
               <input
                 type="file"
                 hidden
-                accept=".epub"
+                accept=".epub,.pdf"
                 onChange={handleFileChange}
               />
             </Button>
+            {file && file.name.toLowerCase().endsWith('.pdf') && (
+              <Alert severity="info" sx={{ mt: 1 }}>
+                📄 PDF 文件将被转换为 HTML 格式，提供更好的双语对照阅读体验
+              </Alert>
+            )}
           </Grid>
 
           <Grid item xs={12} md={6}>
@@ -357,6 +406,25 @@ function App() {
             </FormControl>
           </Grid>
 
+          {provider === 'nltranslator' && (
+            <Grid item xs={12} md={6}>
+              <FormControl fullWidth>
+                <InputLabel>原始语言</InputLabel>
+                <Select
+                  value={sourceLanguage}
+                  label="原始语言"
+                  onChange={(e) => setSourceLanguage(e.target.value)}
+                >
+                  {languages.map((lang) => (
+                    <MenuItem key={lang} value={lang}>
+                      {lang}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+          )}
+
           {provider !== 'nltranslator' && (
             <>
               <Grid item xs={12} md={6}>
@@ -364,7 +432,16 @@ function App() {
                   fullWidth
                   label="模型"
                   value={model}
-                  onChange={(e) => setModel(e.target.value)}
+                  onChange={(e) => {
+                    setModel(e.target.value);
+                    // 如果是自定义API，实时保存配置
+                    if (provider === 'custom') {
+                      setCustomApiConfig(prev => ({
+                        ...prev,
+                        model: e.target.value
+                      }));
+                    }
+                  }}
                   placeholder={providers.find(p => p.value === provider)?.defaultModel || ''}
                   helperText="例如: gpt-4, claude-3-5-sonnet, gemini-pro"
                 />
@@ -391,7 +468,16 @@ function App() {
                 label="API Key"
                 type="password"
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
+                onChange={(e) => {
+                  setApiKey(e.target.value);
+                  // 如果是自定义API，实时保存配置
+                  if (provider === 'custom') {
+                    setCustomApiConfig(prev => ({
+                      ...prev,
+                      apiKey: e.target.value
+                    }));
+                  }
+                }}
                 placeholder="sk-..."
                 required
               />
@@ -403,7 +489,16 @@ function App() {
               fullWidth
               label="API URL"
               value={apiUrl}
-              onChange={(e) => setApiUrl(e.target.value)}
+              onChange={(e) => {
+                setApiUrl(e.target.value);
+                // 如果是自定义API，实时保存配置
+                if (provider === 'custom') {
+                  setCustomApiConfig(prev => ({
+                    ...prev,
+                    apiUrl: e.target.value
+                  }));
+                }
+              }}
               placeholder="https://api.openai.com/v1/chat/completions"
               helperText={provider === 'nltranslator' ? 'NLTranslator Proxy 服务地址（需要先启动 NLTranslatorProxy）' : ''}
             />
@@ -523,7 +618,7 @@ function App() {
                       startIcon={<Download />}
                       onClick={() => handleDownload(task.id, task.sourceFile)}
                     >
-                      下载翻译文件
+                      下载翻译文件 {task.sourceFile.toLowerCase().endsWith('.pdf') ? '(HTML格式)' : ''}
                     </Button>
                   )}
 

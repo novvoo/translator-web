@@ -9,7 +9,7 @@ LICENSE
 *.md
 
 # Backend temporary files
-backend/cache/
+backend/data/
 backend/uploads/
 backend/outputs/
 backend/frontend/
@@ -64,3 +64,4 @@ Makefile
 docker-compose.yml
 Dockerfile
 .dockerignore
+*.exe
