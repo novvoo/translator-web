@@ -108,6 +108,13 @@ func TranslateHandler(c *gin.Context) {
 		return
 	}
 
+	// 检查文件大小（100MB限制）
+	const MaxFileSize = 100 * 1024 * 1024 // 100MB
+	if file.Size > MaxFileSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "文件过大，最大支持100MB"})
+		return
+	}
+
 	// 解析配置
 	var req models.TranslateRequest
 	req.TargetLanguage = c.PostForm("targetLanguage")
@@ -189,7 +196,14 @@ func TranslateHandler(c *gin.Context) {
 	// 为用户创建独立的目录
 	userDir := filepath.Join("data", "users", sessionID)
 	uploadDir := filepath.Join(userDir, "uploads")
-	os.MkdirAll(uploadDir, 0755)
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+			t.Status = "failed"
+			t.Error = "创建上传目录失败: " + err.Error()
+		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建上传目录失败: " + err.Error()})
+		return
+	}
 
 	// 根据文件类型确定保存路径
 	sourcePath := filepath.Join(uploadDir, taskID+ext)
@@ -231,7 +245,14 @@ func processTranslation(sessionID, taskID, sourcePath string, req models.Transla
 
 	// 为每个用户创建独立的缓存目录
 	userCacheDir := filepath.Join("data", "users", sessionID, "cache")
-	os.MkdirAll(userCacheDir, 0755)
+	if err := os.MkdirAll(userCacheDir, 0755); err != nil {
+		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+			t.Status = "failed"
+			t.Error = "创建缓存目录失败: " + err.Error()
+		})
+		log.Printf("[会话 %s][任务 %s] 创建缓存目录失败: %v", sessionID[:8], taskID, err)
+		return
+	}
 
 	log.Printf("[会话 %s][任务 %s] 创建翻译客户端，提供商: %s, 模型: %s", sessionID[:8], taskID, req.LLMConfig.Provider, req.LLMConfig.Model)
 	cache, _ := translator.NewCache(userCacheDir)
@@ -265,7 +286,14 @@ func processTranslation(sessionID, taskID, sourcePath string, req models.Transla
 
 	// 确定输出路径
 	userOutputDir := filepath.Join("data", "users", sessionID, "outputs")
-	os.MkdirAll(userOutputDir, 0755)
+	if err := os.MkdirAll(userOutputDir, 0755); err != nil {
+		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
+			t.Status = "failed"
+			t.Error = "创建输出目录失败: " + err.Error()
+		})
+		log.Printf("[会话 %s][任务 %s] 创建输出目录失败: %v", sessionID[:8], taskID, err)
+		return
+	}
 
 	ext := strings.ToLower(filepath.Ext(sourcePath))
 	var outputPath string
@@ -347,6 +375,12 @@ func DownloadHandler(c *gin.Context) {
 		return
 	}
 
+	// 检查文件是否存在
+	if _, err := os.Stat(task.OutputPath); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "翻译文件不存在"})
+		return
+	}
+
 	// 设置下载文件名（根据实际输出文件类型）
 	outputExt := strings.ToLower(filepath.Ext(task.OutputPath))
 	sourceExt := strings.ToLower(filepath.Ext(task.SourceFile))
@@ -378,29 +412,4 @@ func GetTasksHandler(c *gin.Context) {
 		"tasks": taskList,
 		"total": len(taskList),
 	})
-}
-
-// 辅助函数：查找 body 开始位置
-func findBodyStart(html string) int {
-	start := 0
-	for i := 0; i < len(html); i++ {
-		if i+5 < len(html) && html[i:i+5] == "<body" {
-			for j := i; j < len(html); j++ {
-				if html[j] == '>' {
-					return j + 1
-				}
-			}
-		}
-	}
-	return start
-}
-
-// 辅助函数：查找 body 结束位置
-func findBodyEnd(html string) int {
-	for i := len(html) - 1; i >= 6; i-- {
-		if html[i-6:i+1] == "</body>" {
-			return i - 6
-		}
-	}
-	return len(html)
 }

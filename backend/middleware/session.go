@@ -2,7 +2,10 @@ package middleware
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -10,7 +13,7 @@ import (
 )
 
 const (
-	SessionCookieName = "epub_session_id"
+	SessionCookieName = "session_id"
 	SessionTimeout    = 24 * time.Hour
 )
 
@@ -38,7 +41,15 @@ func init() {
 // generateSessionID 生成随机会话 ID
 func generateSessionID() string {
 	b := make([]byte, 32)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// 使用加密安全的替代方案
+		h := sha256.New()
+		h.Write([]byte(time.Now().String()))
+		h.Write([]byte(os.Getenv("HOSTNAME")))
+		// 添加进程ID增加随机性
+		h.Write([]byte(fmt.Sprintf("%d", os.Getpid())))
+		return hex.EncodeToString(h.Sum(nil))
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -72,8 +83,8 @@ func (sm *SessionManager) GetOrCreateSession(sessionID string) *Session {
 
 // GetSession 获取会话（不创建新会话）
 func (sm *SessionManager) GetSession(sessionID string) (*Session, bool) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 
 	session, exists := sm.sessions[sessionID]
 	if !exists {
@@ -82,9 +93,13 @@ func (sm *SessionManager) GetSession(sessionID string) (*Session, bool) {
 
 	// 检查是否过期
 	if time.Since(session.LastSeen) >= SessionTimeout {
+		// 删除过期会话
+		delete(sm.sessions, sessionID)
 		return nil, false
 	}
 
+	// 更新最后访问时间
+	session.LastSeen = time.Now()
 	return session, true
 }
 
@@ -133,14 +148,16 @@ func SessionMiddleware() gin.HandlerFunc {
 
 		// 设置 Cookie（如果是新会话或会话 ID 变化）
 		if sessionID != session.ID {
+			// 根据请求协议设置secure标志
+			isSecure := c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https"
 			c.SetCookie(
 				SessionCookieName,
 				session.ID,
 				int(SessionTimeout.Seconds()),
 				"/",
 				"",
-				false, // secure (在生产环境应设为 true)
-				true,  // httpOnly
+				isSecure, // 在HTTPS环境下启用secure标志
+				true,     // httpOnly
 			)
 		}
 
@@ -157,5 +174,8 @@ func GetSessionID(c *gin.Context) string {
 	if !exists {
 		return ""
 	}
-	return sessionID.(string)
+	if id, ok := sessionID.(string); ok {
+		return id
+	}
+	return ""
 }

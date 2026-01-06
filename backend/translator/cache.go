@@ -3,7 +3,6 @@ package translator
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -56,6 +55,10 @@ func (c *Cache) Get(key string) (string, bool) {
 
 // Set 设置缓存
 func (c *Cache) Set(key, value string) error {
+	if c.disabled {
+		return nil // 禁用时不写入
+	}
+
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -73,11 +76,12 @@ func (c *Cache) hashKey(key string) string {
 
 // CacheKey 生成缓存键
 func CacheKey(text, targetLanguage, userPrompt string) string {
-	data := map[string]string{
-		"text":           text,
-		"targetLanguage": targetLanguage,
-		"userPrompt":     userPrompt,
-	}
-	jsonData, _ := json.Marshal(data)
-	return string(jsonData)
+	// 使用哈希而不是JSON来避免键顺序问题
+	h := sha256.New()
+	h.Write([]byte(text))
+	h.Write([]byte("|")) // 分隔符
+	h.Write([]byte(targetLanguage))
+	h.Write([]byte("|"))
+	h.Write([]byte(userPrompt))
+	return hex.EncodeToString(h.Sum(nil))
 }

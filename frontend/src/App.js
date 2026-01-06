@@ -149,22 +149,28 @@ function App() {
     // 初始加载
     loadTasks();
 
-    // 动态刷新：有活跃任务时 2 秒刷新一次，否则 10 秒刷新一次
-    let intervalId;
+    // 动态刷新：有活跃任务时 3 秒刷新一次，否则 15 秒刷新一次
+    let isActive = true;
+    let timeoutId;
 
     const scheduleNextRefresh = async () => {
+      if (!isActive) return;
+      
       const hasActiveTasks = await loadTasks();
       const delay = hasActiveTasks ? 3000 : 15000; // 活跃任务 3 秒，否则 15 秒
 
-      intervalId = setTimeout(scheduleNextRefresh, delay);
+      if (isActive) {
+        timeoutId = setTimeout(scheduleNextRefresh, delay);
+      }
     };
 
     // 启动第一次刷新
-    intervalId = setTimeout(scheduleNextRefresh, 3000);
+    timeoutId = setTimeout(scheduleNextRefresh, 3000);
 
     return () => {
-      if (intervalId) {
-        clearTimeout(intervalId);
+      isActive = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
       }
     };
   }, []); // 空依赖数组，只在组件挂载时设置一次
@@ -514,7 +520,7 @@ function App() {
                 }}
                 placeholder="sk-..."
                 required={!providers.find(p => p.value === provider)?.apiKeyOptional}
-                helperText={provider === 'libretranslate' ? 'LibreTranslate 公共实例通常不需要 API Key，私有部署可能需要' : ''}
+                helperText={provider === 'libretranslate' ? 'LibreTranslate 公共实例通常不需要 API Key，私有部署可能需要' : '⚠️ API Key 将保存在浏览器本地存储中，请注意安全'}
               />
             </Grid>
           )}
