@@ -391,6 +391,40 @@ func (e *EPUBFile) InsertTranslation(translations map[string]string) error {
 	return nil
 }
 
+// InsertMonolingualTranslation 插入单语翻译（实现 Document 接口）
+func (e *EPUBFile) InsertMonolingualTranslation(translations map[string]string) error {
+	htmlFiles := e.GetHTMLFiles()
+
+	for _, filename := range htmlFiles {
+		content := e.Files[filename]
+		htmlContent, err := ParseHTML(content)
+		if err != nil {
+			continue
+		}
+
+		// 插入单语翻译（替换原文）
+		translatedBody := InsertMonolingualTranslation(htmlContent.Body, translations)
+
+		// 重新构建完整的 HTML
+		originalStr := string(content)
+		bodyStart := strings.Index(originalStr, "<body")
+		if bodyStart == -1 {
+			continue
+		}
+
+		bodyStartEnd := strings.Index(originalStr[bodyStart:], ">") + bodyStart + 1
+		bodyEnd := strings.Index(originalStr, "</body>")
+		if bodyEnd == -1 {
+			bodyEnd = len(originalStr)
+		}
+
+		newContent := originalStr[:bodyStartEnd] + translatedBody + originalStr[bodyEnd:]
+		e.Files[filename] = []byte(newContent)
+	}
+
+	return nil
+}
+
 // Save 保存文档（实现 Document 接口）
 func (e *EPUBFile) Save(outputPath string) error {
 	return e.SaveEPUB(outputPath)
@@ -410,4 +444,101 @@ func ValidateEPUB(filePath string) error {
 	}
 
 	return nil
+}
+
+// InsertMonolingualTranslation 插入单语翻译（替换原文）
+func InsertMonolingualTranslation(html string, translations map[string]string) string {
+	var buf bytes.Buffer
+	decoder := xml.NewDecoder(strings.NewReader(html))
+	var currentText strings.Builder
+	var depth int
+	var inSpan bool
+
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			// 解析失败，返回原文
+			return html
+		}
+
+		switch t := token.(type) {
+		case xml.StartElement:
+			buf.WriteString("<")
+			buf.WriteString(t.Name.Local)
+			for _, attr := range t.Attr {
+				buf.WriteString(fmt.Sprintf(` %s="%s"`, attr.Name.Local, attr.Value))
+			}
+			buf.WriteString(">")
+			depth++
+
+			// 检测 span 标签
+			if t.Name.Local == "span" {
+				inSpan = true
+			}
+
+		case xml.EndElement:
+			// 在 span 结束标签前替换内容
+			if t.Name.Local == "span" && inSpan && currentText.Len() > 0 {
+				original := strings.TrimSpace(currentText.String())
+				// 如果有翻译，使用翻译；否则保留原文
+				if trans, ok := translations[original]; ok && trans != "" {
+					// 清除之前写入的原文内容，写入翻译
+					bufStr := buf.String()
+					lastSpanStart := strings.LastIndex(bufStr, "<span")
+					if lastSpanStart != -1 {
+						// 找到span开始标签的结束位置
+						spanTagEnd := strings.Index(bufStr[lastSpanStart:], ">")
+						if spanTagEnd != -1 {
+							spanTagEnd += lastSpanStart + 1
+							// 重构buffer：保留到span标签结束，然后加入翻译内容
+							buf.Reset()
+							buf.WriteString(bufStr[:spanTagEnd])
+							buf.WriteString(trans)
+						}
+					}
+				}
+				buf.WriteString("</")
+				buf.WriteString(t.Name.Local)
+				buf.WriteString(">")
+				currentText.Reset()
+				inSpan = false
+			} else {
+				// 在块级元素结束标签前替换内容
+				if isBlockElement(t.Name.Local) && currentText.Len() > 0 {
+					original := strings.TrimSpace(currentText.String())
+					if trans, ok := translations[original]; ok && trans != "" {
+						// 对于块级元素，需要更复杂的替换逻辑
+						// 这里简化处理，直接在结束标签前添加翻译
+						buf.WriteString(fmt.Sprintf(`<div class="translation">%s</div>`, trans))
+					}
+					currentText.Reset()
+				}
+				buf.WriteString("</")
+				buf.WriteString(t.Name.Local)
+				buf.WriteString(">")
+			}
+			depth--
+
+		case xml.CharData:
+			text := string(t)
+			if inSpan {
+				// 对于span内的文本，先收集，在结束标签时处理
+				currentText.WriteString(strings.TrimSpace(text))
+				currentText.WriteString(" ")
+			} else {
+				// 对于非span文本，检查是否需要替换
+				trimmedText := strings.TrimSpace(text)
+				if trans, ok := translations[trimmedText]; ok && trans != "" && trimmedText != "" {
+					buf.WriteString(trans)
+				} else {
+					buf.WriteString(text)
+				}
+			}
+		}
+	}
+
+	return buf.String()
 }

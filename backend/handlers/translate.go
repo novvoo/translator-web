@@ -113,6 +113,7 @@ func TranslateHandler(c *gin.Context) {
 	req.TargetLanguage = c.PostForm("targetLanguage")
 	req.UserPrompt = c.PostForm("userPrompt")
 	req.ForceRetranslate = c.PostForm("forceRetranslate") == "true"
+	req.GenerateMode = c.PostForm("generateMode") // 新增：生成模式
 
 	// 解析 LLM 配置
 	llmConfigStr := c.PostForm("llmConfig")
@@ -127,6 +128,11 @@ func TranslateHandler(c *gin.Context) {
 	if req.TargetLanguage == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "目标语言不能为空"})
 		return
+	}
+
+	// 设置默认生成模式
+	if req.GenerateMode == "" {
+		req.GenerateMode = "bilingual" // 默认双语
 	}
 	if req.LLMConfig.Provider == "" {
 		req.LLMConfig.Provider = "openai" // 默认使用 OpenAI
@@ -279,8 +285,8 @@ func processTranslation(sessionID, taskID, sourcePath string, req models.Transla
 	}
 
 	// 执行翻译
-	log.Printf("[会话 %s][任务 %s] 开始翻译文档: %s", sessionID[:8], taskID, sourcePath)
-	actualOutputPath, err := docTranslator.TranslateDocument(sourcePath, outputPath, req.TargetLanguage, req.UserPrompt, progressCallback)
+	log.Printf("[会话 %s][任务 %s] 开始翻译文档: %s，生成模式: %s", sessionID[:8], taskID, sourcePath, req.GenerateMode)
+	actualOutputPath, err := docTranslator.TranslateDocument(sourcePath, outputPath, req.TargetLanguage, req.UserPrompt, req.ForceRetranslate, req.GenerateMode, progressCallback)
 	if err != nil {
 		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
 			t.Status = "failed"

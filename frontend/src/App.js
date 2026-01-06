@@ -62,6 +62,7 @@ function App() {
   const [temperature, setTemperature] = useState(() => loadConfig('temperature', 0.3));
   const [userPrompt, setUserPrompt] = useState(() => loadConfig('userPrompt', ''));
   const [forceRetranslate, setForceRetranslate] = useState(false);
+  const [generateMode, setGenerateMode] = useState(() => loadConfig('generateMode', 'bilingual')); // 新增：生成模式
   const [tasks, setTasks] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
@@ -117,6 +118,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem('userPrompt', JSON.stringify(userPrompt));
   }, [userPrompt]);
+
+  useEffect(() => {
+    localStorage.setItem('generateMode', JSON.stringify(generateMode));
+  }, [generateMode]);
 
   // 保存自定义API配置
   useEffect(() => {
@@ -211,6 +216,7 @@ function App() {
       localStorage.removeItem('temperature');
       localStorage.removeItem('userPrompt');
       localStorage.removeItem('customApiConfig'); // 清除自定义API配置
+      localStorage.removeItem('generateMode'); // 清除生成模式配置
 
       // 重置为默认值
       setTargetLanguage('Chinese');
@@ -221,6 +227,7 @@ function App() {
       setModel('gpt-4');
       setTemperature(0.3);
       setUserPrompt('');
+      setGenerateMode('bilingual'); // 重置生成模式
       setCustomApiConfig({ apiUrl: '', model: '', apiKey: '' });
     }
   };
@@ -259,6 +266,7 @@ function App() {
       formData.append('userPrompt', userPrompt);
     }
     formData.append('forceRetranslate', forceRetranslate.toString());
+    formData.append('generateMode', generateMode); // 新增：生成模式
 
     try {
       const response = await axios.post('/api/translate', formData, {
@@ -368,7 +376,13 @@ function App() {
             </Button>
             {file && file.name.toLowerCase().endsWith('.pdf') && (
               <Alert severity="info" sx={{ mt: 1 }}>
-                📄 PDF 文件将被转换为 HTML 格式，提供更好的双语对照阅读体验
+                📄 PDF 文件支持两种翻译模式：
+                <br />
+                • <strong>高级模式</strong>：使用 PDFMathTranslate，完美保留布局、公式和图表（推荐）
+                <br />
+                • <strong>基础模式</strong>：转换为 HTML 格式，提供双语对照阅读体验
+                <br />
+                系统将自动选择最佳模式
               </Alert>
             )}
           </Grid>
@@ -405,6 +419,25 @@ function App() {
                 ))}
               </Select>
             </FormControl>
+          </Grid>
+
+          <Grid item xs={12} md={6}>
+            <FormControl fullWidth>
+              <InputLabel>生成模式</InputLabel>
+              <Select
+                value={generateMode}
+                label="生成模式"
+                onChange={(e) => setGenerateMode(e.target.value)}
+              >
+                <MenuItem value="bilingual">双语对照（推荐）</MenuItem>
+                <MenuItem value="monolingual">仅译文</MenuItem>
+              </Select>
+            </FormControl>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+              {generateMode === 'bilingual' 
+                ? '📖 生成包含原文和译文的对照版本，便于学习和对比'
+                : '📝 仅生成翻译后的内容，适合直接阅读'}
+            </Typography>
           </Grid>
 
           {(provider === 'nltranslator' || provider === 'libretranslate') && (

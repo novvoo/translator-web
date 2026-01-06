@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/ledongthuc/pdf"
 )
@@ -329,6 +330,118 @@ func (d *PDFDocument) SaveBilingualHTML(outputPath string, originalBlocks, trans
 	return writeTextFile(outputPath, content.String())
 }
 
+// SaveMonolingualHTML 保存单语 HTML 文件
+func (d *PDFDocument) SaveMonolingualHTML(outputPath string, translatedBlocks []string) error {
+	var content strings.Builder
+
+	content.WriteString(`<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>PDF 翻译结果 / PDF Translation Result</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            line-height: 1.6; 
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 20px;
+        }
+        .header h1 {
+            color: #2c3e50;
+            margin: 0;
+        }
+        .meta-info {
+            background-color: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 30px;
+        }
+        .section { 
+            margin-bottom: 20px; 
+            padding: 15px;
+            background-color: #e8f4f8;
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+        }
+        .content {
+            color: #34495e;
+            white-space: pre-wrap;
+            line-height: 1.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📝 PDF 翻译结果</h1>
+            <h2>PDF Translation Result</h2>
+        </div>
+        
+        <div class="meta-info">
+            <strong>原文件:</strong> ` + filepath.Base(d.Path) + `<br>
+            <strong>总页数:</strong> ` + fmt.Sprintf("%d", d.Metadata.Pages) + `<br>
+            <strong>翻译时间:</strong> <span id="datetime"></span>
+        </div>
+`)
+
+	for _, block := range translatedBlocks {
+		if strings.TrimSpace(block) == "" {
+			continue
+		}
+
+		content.WriteString(fmt.Sprintf(`
+        <div class="section">
+            <div class="content">%s</div>
+        </div>
+`, strings.ReplaceAll(block, "\n", "<br>")))
+	}
+
+	content.WriteString(`
+    </div>
+    <script>
+        document.getElementById('datetime').textContent = new Date().toLocaleString();
+    </script>
+</body>
+</html>`)
+
+	return writeTextFile(outputPath, content.String())
+}
+
+// SaveMonolingualText 保存单语文本文件
+func (d *PDFDocument) SaveMonolingualText(outputPath string, translatedBlocks []string) error {
+	var content strings.Builder
+
+	content.WriteString("PDF 翻译结果 / PDF Translation Result\n")
+	content.WriteString("原文件: " + filepath.Base(d.Path) + "\n")
+	content.WriteString("总页数: " + fmt.Sprintf("%d", d.Metadata.Pages) + "\n")
+	content.WriteString("翻译时间: " + time.Now().Format("2006-01-02 15:04:05") + "\n")
+	content.WriteString(strings.Repeat("=", 50) + "\n\n")
+
+	for i, block := range translatedBlocks {
+		if strings.TrimSpace(block) == "" {
+			continue
+		}
+
+		content.WriteString(fmt.Sprintf("段落 %d:\n%s\n\n", i+1, block))
+	}
+
+	return writeTextFile(outputPath, content.String())
+}
+
 // writeTextFile 写入文本文件
 func writeTextFile(filePath, content string) error {
 	file, err := os.Create(filePath)
@@ -339,4 +452,116 @@ func writeTextFile(filePath, content string) error {
 
 	_, err = file.WriteString(content)
 	return err
+}
+
+// SaveBilingualPDF 保存双语PDF文件
+func (d *PDFDocument) SaveBilingualPDF(outputPath string, originalBlocks, translatedBlocks []string) error {
+	// 创建PDF生成器
+	generator := NewPDFGenerator("")
+
+	// 构建PDF内容
+	originalContent := &PDFContent{
+		TextBlocks: make([]TextBlock, 0, len(originalBlocks)),
+		Metadata: map[string]string{
+			"title":   filepath.Base(d.Path),
+			"author":  "",
+			"subject": "PDF Translation Result",
+		},
+	}
+
+	translatedContent := &PDFContent{
+		TextBlocks: make([]TextBlock, 0, len(translatedBlocks)),
+		Metadata: map[string]string{
+			"title":   filepath.Base(d.Path),
+			"author":  "",
+			"subject": "PDF Translation Result",
+		},
+	}
+
+	// 填充文本块
+	for i, block := range originalBlocks {
+		if strings.TrimSpace(block) == "" {
+			continue
+		}
+		originalContent.TextBlocks = append(originalContent.TextBlocks, TextBlock{
+			Text:    block,
+			PageNum: (i / 10) + 1, // 简单的页面分组
+		})
+	}
+
+	for i, block := range translatedBlocks {
+		if strings.TrimSpace(block) == "" {
+			continue
+		}
+		translatedContent.TextBlocks = append(translatedContent.TextBlocks, TextBlock{
+			Text:    block,
+			PageNum: (i / 10) + 1, // 简单的页面分组
+		})
+	}
+
+	// 生成PDF配置
+	config := BilingualPDFConfig{
+		Title:        filepath.Base(d.Path),
+		Author:       "",
+		Subject:      "PDF Translation Result",
+		Creator:      "PDF Translator",
+		SourceLang:   "Original",
+		TargetLang:   "Translation",
+		ShowOriginal: true,
+		FontSize:     12,
+		LineSpacing:  6,
+		Margin:       20,
+	}
+
+	return generator.GenerateBilingualPDF(originalContent, translatedContent, outputPath, config)
+}
+
+// SaveMonolingualPDF 保存单语PDF文件
+func (d *PDFDocument) SaveMonolingualPDF(outputPath string, translatedBlocks []string) error {
+	// 创建PDF生成器
+	generator := NewPDFGenerator("")
+
+	// 构建PDF内容
+	content := &PDFContent{
+		TextBlocks: make([]TextBlock, 0, len(translatedBlocks)),
+		Metadata: map[string]string{
+			"title":   filepath.Base(d.Path),
+			"author":  "",
+			"subject": "PDF Translation Result",
+		},
+	}
+
+	// 填充文本块
+	for i, block := range translatedBlocks {
+		if strings.TrimSpace(block) == "" {
+			continue
+		}
+		content.TextBlocks = append(content.TextBlocks, TextBlock{
+			Text:    block,
+			PageNum: (i / 10) + 1, // 简单的页面分组
+		})
+	}
+
+	// 生成PDF配置
+	config := BilingualPDFConfig{
+		Title:        filepath.Base(d.Path),
+		Author:       "",
+		Subject:      "PDF Translation Result",
+		Creator:      "PDF Translator",
+		SourceLang:   "",
+		TargetLang:   "Translation",
+		ShowOriginal: false,
+		FontSize:     12,
+		LineSpacing:  6,
+		Margin:       20,
+	}
+
+	return generator.GenerateMonolingualPDF(content, outputPath, config)
+}
+
+// InsertMonolingualTranslation 插入单语翻译（实现 Document 接口）
+func (d *PDFDocument) InsertMonolingualTranslation(translations map[string]string) error {
+	// PDF文档不支持直接插入翻译，这个方法主要是为了实现接口
+	// 实际的单语翻译保存通过 SaveMonolingualPDF, SaveMonolingualHTML 和 SaveMonolingualText 方法实现
+	return nil
 }

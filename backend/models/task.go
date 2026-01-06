@@ -30,4 +30,5 @@ type TranslateRequest struct {
 	LLMConfig        LLMConfig `json:"llmConfig"`
 	UserPrompt       string    `json:"userPrompt,omitempty"`
 	ForceRetranslate bool      `json:"forceRetranslate,omitempty"` // 是否强制重新翻译（忽略缓存）
+	GenerateMode     string    `json:"generateMode,omitempty"`     // 生成模式：bilingual（双语）或 monolingual（单语）
 }

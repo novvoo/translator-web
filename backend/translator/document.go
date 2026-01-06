@@ -10,6 +10,7 @@ import (
 type Document interface {
 	GetTextBlocks() []string
 	InsertTranslation(translations map[string]string) error
+	InsertMonolingualTranslation(translations map[string]string) error // 新增：单语翻译插入
 	Save(outputPath string) error
 }
 
@@ -19,6 +20,14 @@ type DocumentType string
 const (
 	DocumentTypeEPUB DocumentType = "epub"
 	DocumentTypePDF  DocumentType = "pdf"
+)
+
+// TranslationMode 翻译模式
+type TranslationMode string
+
+const (
+	TranslationModeBasic    TranslationMode = "basic"    // 基础翻译（当前实现）
+	TranslationModeAdvanced TranslationMode = "advanced" // 高级翻译（PDFMathTranslate）
 )
 
 // OpenDocument 根据文件类型打开文档
@@ -59,6 +68,23 @@ func ValidateDocument(filePath string) error {
 	}
 }
 
+// GetRecommendedTranslationMode 获取推荐的翻译模式
+func GetRecommendedTranslationMode(docType DocumentType) TranslationMode {
+	switch docType {
+	case DocumentTypePDF:
+		// PDF优先使用PDFMathTranslate（如果可用）
+		if IsPDFMathTranslateAvailable() {
+			return TranslationModeAdvanced
+		}
+		return TranslationModeBasic
+	case DocumentTypeEPUB:
+		// EPUB使用基础翻译
+		return TranslationModeBasic
+	default:
+		return TranslationModeBasic
+	}
+}
+
 // GetDocumentInfo 获取文档信息
 func GetDocumentInfo(filePath string) (map[string]interface{}, error) {
 	ext := strings.ToLower(filepath.Ext(filePath))
@@ -89,6 +115,10 @@ func GetDocumentInfo(filePath string) (map[string]interface{}, error) {
 		if err == nil {
 			info["textBlocks"] = len(pdf.GetTextBlocks())
 		}
+
+		// 检查是否支持高级翻译
+		info["advancedTranslationAvailable"] = IsPDFMathTranslateAvailable()
+		info["recommendedMode"] = string(GetRecommendedTranslationMode(DocumentTypePDF))
 
 	default:
 		return nil, fmt.Errorf("不支持的文件格式: %s", ext)

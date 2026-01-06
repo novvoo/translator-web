@@ -27,6 +27,7 @@ const (
 type Provider interface {
 	Translate(text, targetLanguage, userPrompt string) (string, error)
 	GetName() string
+	GetConfig() ProviderConfig
 }
 
 // ProviderConfig 提供商配置
@@ -45,6 +46,11 @@ type BaseProvider struct {
 	Config     ProviderConfig
 	HTTPClient *http.Client
 	Cache      *Cache
+}
+
+// GetConfig 获取提供商配置
+func (b *BaseProvider) GetConfig() ProviderConfig {
+	return b.Config
 }
 
 // NewProvider 创建提供商实例
