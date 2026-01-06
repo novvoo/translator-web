@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for translator-web on 2026-01-04T18:35:37+08:00
+# fly.toml app configuration file generated for translator-web on 2026-01-06T11:55:20+08:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -9,6 +9,9 @@ primary_region = 'lax'
 [build]
   dockerfile = 'Dockerfile'
 
+[[mounts]]
+  source = 'epub_data'
+  destination = '/root/data'
 
 [http_service]
   internal_port = 8080
@@ -21,7 +24,3 @@ primary_region = 'lax'
   memory = '1gb'
   cpus = 1
   memory_mb = 1024
-
-[[mounts]]
-  source = 'epub_data'
-  destination = '/root/data'

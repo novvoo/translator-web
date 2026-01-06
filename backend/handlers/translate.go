@@ -280,7 +280,7 @@ func processTranslation(sessionID, taskID, sourcePath string, req models.Transla
 
 	// 执行翻译
 	log.Printf("[会话 %s][任务 %s] 开始翻译文档: %s", sessionID[:8], taskID, sourcePath)
-	err = docTranslator.TranslateDocument(sourcePath, outputPath, req.TargetLanguage, req.UserPrompt, progressCallback)
+	actualOutputPath, err := docTranslator.TranslateDocument(sourcePath, outputPath, req.TargetLanguage, req.UserPrompt, progressCallback)
 	if err != nil {
 		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
 			t.Status = "failed"
@@ -295,10 +295,10 @@ func processTranslation(sessionID, taskID, sourcePath string, req models.Transla
 		t.Status = "completed"
 		t.Progress = 1.0
 		t.CompletedAt = time.Now()
-		t.OutputPath = outputPath
+		t.OutputPath = actualOutputPath // 使用实际的输出路径
 	})
 
-	log.Printf("[会话 %s][任务 %s] 翻译完成: %s", sessionID[:8], taskID, outputPath)
+	log.Printf("[会话 %s][任务 %s] 翻译完成: %s", sessionID[:8], taskID, actualOutputPath)
 }
 
 // GetStatusHandler 获取任务状态
