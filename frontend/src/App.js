@@ -81,6 +81,7 @@ function App() {
     { value: 'deepseek', label: 'DeepSeek', defaultUrl: 'https://api.deepseek.com/v1/chat/completions', defaultModel: 'deepseek-chat' },
     { value: 'ollama', label: 'Ollama (本地)', defaultUrl: 'http://localhost:11434/api/generate', defaultModel: 'llama2', noApiKey: true },
     { value: 'nltranslator', label: 'NLTranslator (Apple 翻译)', defaultUrl: 'http://localhost:8765/translate', defaultModel: '', noApiKey: true, modelOptional: true },
+    { value: 'libretranslate', label: 'LibreTranslate', defaultUrl: 'https://libretranslate.com/translate', defaultModel: '', modelOptional: true, apiKeyOptional: true },
     { value: 'custom', label: '自定义 API', defaultUrl: '', defaultModel: '', modelOptional: true },
   ];
 
@@ -230,7 +231,7 @@ function App() {
       return;
     }
     const currentProvider = providers.find(p => p.value === provider);
-    if (!currentProvider?.noApiKey && !apiKey) {
+    if (!currentProvider?.noApiKey && !currentProvider?.apiKeyOptional && !apiKey) {
       setError('请输入 API Key');
       return;
     }
@@ -250,7 +251,7 @@ function App() {
       model: model,
       temperature: temperature,
       maxTokens: 4000,
-      extra: provider === 'nltranslator' ? { sourceLanguage: sourceLanguage } : {},
+      extra: (provider === 'nltranslator' || provider === 'libretranslate') ? { sourceLanguage: sourceLanguage } : {},
     };
 
     formData.append('llmConfig', JSON.stringify(llmConfig));
@@ -406,7 +407,7 @@ function App() {
             </FormControl>
           </Grid>
 
-          {provider === 'nltranslator' && (
+          {(provider === 'nltranslator' || provider === 'libretranslate') && (
             <Grid item xs={12} md={6}>
               <FormControl fullWidth>
                 <InputLabel>原始语言</InputLabel>
@@ -425,7 +426,7 @@ function App() {
             </Grid>
           )}
 
-          {provider !== 'nltranslator' && (
+          {(provider !== 'nltranslator' && provider !== 'libretranslate') && (
             <>
               <Grid item xs={12} md={6}>
                 <TextField
@@ -465,7 +466,7 @@ function App() {
             <Grid item xs={12}>
               <TextField
                 fullWidth
-                label="API Key"
+                label={providers.find(p => p.value === provider)?.apiKeyOptional ? "API Key (可选)" : "API Key"}
                 type="password"
                 value={apiKey}
                 onChange={(e) => {
@@ -479,7 +480,8 @@ function App() {
                   }
                 }}
                 placeholder="sk-..."
-                required
+                required={!providers.find(p => p.value === provider)?.apiKeyOptional}
+                helperText={provider === 'libretranslate' ? 'LibreTranslate 公共实例通常不需要 API Key，私有部署可能需要' : ''}
               />
             </Grid>
           )}
@@ -500,11 +502,17 @@ function App() {
                 }
               }}
               placeholder="https://api.openai.com/v1/chat/completions"
-              helperText={provider === 'nltranslator' ? 'NLTranslator Proxy 服务地址（需要先启动 NLTranslatorProxy）' : ''}
+              helperText={
+                provider === 'nltranslator' 
+                  ? 'NLTranslator Proxy 服务地址（需要先启动 NLTranslatorProxy）' 
+                  : provider === 'libretranslate'
+                  ? 'LibreTranslate 服务地址，例如：https://libretranslate.com/translate 或本地部署地址'
+                  : ''
+              }
             />
           </Grid>
 
-          {provider !== 'nltranslator' && (
+          {(provider !== 'nltranslator' && provider !== 'libretranslate') && (
             <Grid item xs={12}>
               <TextField
                 fullWidth
@@ -548,7 +556,7 @@ function App() {
               size="large"
               fullWidth
               onClick={handleUpload}
-              disabled={!file || uploading || (!providers.find(p => p.value === provider)?.noApiKey && !apiKey)}
+              disabled={!file || uploading || (!providers.find(p => p.value === provider)?.noApiKey && !providers.find(p => p.value === provider)?.apiKeyOptional && !apiKey)}
               startIcon={<CloudUpload />}
             >
               {uploading ? '上传中...' : (forceRetranslate ? '开始重新翻译' : '开始翻译')}

@@ -13,13 +13,14 @@ import (
 type ProviderType string
 
 const (
-	ProviderOpenAI      ProviderType = "openai"
-	ProviderClaude      ProviderType = "claude"
-	ProviderGemini      ProviderType = "gemini"
-	ProviderCustom      ProviderType = "custom"
-	ProviderOllama      ProviderType = "ollama"
-	ProviderDeepSeek    ProviderType = "deepseek"
-	ProviderNLTranslate ProviderType = "nltranslator" // macOS NaturalLanguage 翻译
+	ProviderOpenAI         ProviderType = "openai"
+	ProviderClaude         ProviderType = "claude"
+	ProviderGemini         ProviderType = "gemini"
+	ProviderCustom         ProviderType = "custom"
+	ProviderOllama         ProviderType = "ollama"
+	ProviderDeepSeek       ProviderType = "deepseek"
+	ProviderNLTranslate    ProviderType = "nltranslator"   // macOS NaturalLanguage 翻译
+	ProviderLibreTranslate ProviderType = "libretranslate" // LibreTranslate 翻译
 )
 
 // Provider AI 提供商接口
@@ -67,6 +68,8 @@ func NewProvider(config ProviderConfig, cache *Cache) (Provider, error) {
 		return &OllamaProvider{BaseProvider: base}, nil
 	case ProviderNLTranslate:
 		return &NLTranslateProvider{BaseProvider: base}, nil
+	case ProviderLibreTranslate:
+		return &LibreTranslateProvider{BaseProvider: base}, nil
 	case ProviderCustom:
 		return &CustomProvider{BaseProvider: base}, nil
 	default:
@@ -650,4 +653,128 @@ func detectSourceLanguage(text string) string {
 
 	// 默认为英文
 	return "en"
+}
+
+// LibreTranslateProvider LibreTranslate 提供商
+type LibreTranslateProvider struct {
+	*BaseProvider
+}
+
+func (p *LibreTranslateProvider) GetName() string {
+	return "libretranslate"
+}
+
+func (p *LibreTranslateProvider) Translate(text, targetLanguage, userPrompt string) (string, error) {
+	// 检查缓存
+	if cached, ok := p.checkCache(text, targetLanguage, userPrompt); ok {
+		return cached, nil
+	}
+
+	// 映射目标语言到 LibreTranslate 语言代码
+	targetLangCode := mapToLibreTranslateLanguageCode(targetLanguage)
+
+	// 获取源语言，优先使用配置中的源语言
+	var sourceLangCode string
+	if p.Config.Extra != nil && p.Config.Extra["sourceLanguage"] != "" {
+		sourceLangCode = mapToLibreTranslateLanguageCode(p.Config.Extra["sourceLanguage"])
+	} else {
+		// 自动检测源语言
+		sourceLangCode = "auto"
+	}
+
+	// 构建请求体
+	reqBody := map[string]interface{}{
+		"q":      text,
+		"source": sourceLangCode,
+		"target": targetLangCode,
+		"format": "text",
+	}
+
+	// 如果配置了 API Key，添加到请求中
+	if p.Config.APIKey != "" {
+		reqBody["api_key"] = p.Config.APIKey
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", p.Config.APIURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	body, err := p.doRequest(req)
+	if err != nil {
+		return "", err
+	}
+
+	var resp struct {
+		TranslatedText string `json:"translatedText"`
+		Error          string `json:"error,omitempty"`
+	}
+
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", fmt.Errorf("解析响应失败: %w", err)
+	}
+
+	if resp.Error != "" {
+		return "", fmt.Errorf("翻译错误: %s", resp.Error)
+	}
+
+	if resp.TranslatedText == "" {
+		return "", fmt.Errorf("API 未返回翻译结果")
+	}
+
+	result := resp.TranslatedText
+	p.saveCache(text, targetLanguage, userPrompt, result)
+	return result, nil
+}
+
+// mapToLibreTranslateLanguageCode 将常见语言名称映射到 LibreTranslate 语言代码
+func mapToLibreTranslateLanguageCode(language string) string {
+	languageMap := map[string]string{
+		"Chinese":             "zh",
+		"Simplified Chinese":  "zh",
+		"简体中文":                "zh",
+		"中文":                  "zh",
+		"Traditional Chinese": "zh",
+		"繁体中文":                "zh",
+		"繁體中文":                "zh",
+		"English":             "en",
+		"英语":                  "en",
+		"英文":                  "en",
+		"Japanese":            "ja",
+		"日语":                  "ja",
+		"日文":                  "ja",
+		"Korean":              "ko",
+		"韩语":                  "ko",
+		"韓語":                  "ko",
+		"Spanish":             "es",
+		"西班牙语":                "es",
+		"French":              "fr",
+		"法语":                  "fr",
+		"German":              "de",
+		"德语":                  "de",
+		"Italian":             "it",
+		"意大利语":                "it",
+		"Portuguese":          "pt",
+		"葡萄牙语":                "pt",
+		"Russian":             "ru",
+		"俄语":                  "ru",
+		"Arabic":              "ar",
+		"阿拉伯语":                "ar",
+		"Hindi":               "hi",
+		"印地语":                 "hi",
+	}
+
+	if code, ok := languageMap[language]; ok {
+		return code
+	}
+
+	// 如果已经是语言代码格式，直接返回
+	return language
 }

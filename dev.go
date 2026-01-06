@@ -33,7 +33,7 @@ func main() {
 	fmt.Println("📦 启动前端开发服务器 (端口 3000)...")
 	frontendCmd := exec.Command(getNpxCmd(), "react-scripts", "start")
 	frontendCmd.Dir = "frontend"
-	frontendCmd.Env = append(os.Environ(), "BROWSER=none")
+	frontendCmd.Env = append(os.Environ(), "BROWSER=none", "NODE_OPTIONS=--no-deprecation")
 	frontendCmd.Stdout = os.Stdout
 	frontendCmd.Stderr = os.Stderr
 	if err := frontendCmd.Start(); err != nil {

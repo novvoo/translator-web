@@ -54,6 +54,7 @@ func buildFrontend() error {
 	fmt.Println("  运行 npm build...")
 	npmBuild := exec.Command(getNpmCmd(), "run", "build")
 	npmBuild.Dir = "frontend"
+	npmBuild.Env = append(os.Environ(), "NODE_OPTIONS=--no-deprecation")
 	npmBuild.Stdout = os.Stdout
 	npmBuild.Stderr = os.Stderr
 	return npmBuild.Run()
