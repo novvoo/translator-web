@@ -374,3 +374,9 @@ func (sfd *SystemFontDetector) isSupportedFontFormat(fontPath string) bool {
 		return false
 	}
 }
+
+// fileExists 检查文件是否存在
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}

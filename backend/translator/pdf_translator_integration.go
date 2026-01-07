@@ -134,44 +134,49 @@ func (pti *PDFTranslatorIntegration) TranslatePDFWithClient(inputPath, outputDir
 	return result, nil
 }
 
-// generateOutputFiles 生成输出文件
+// generateOutputFiles 生成输出文件 - 使用文本替换保留样式
 func (pti *PDFTranslatorIntegration) generateOutputFiles(originalContent, translatedContent *PDFContent, inputPath, outputDir string, config PDFMathConfig) (*PDFMathResult, error) {
 	filename := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
 
-	// 创建PDF生成器
-	generator := NewPDFGenerator("")
+	// 构建翻译映射
+	translations := make(map[string]string)
+	for _, block := range originalContent.TextBlocks {
+		originalText := strings.TrimSpace(block.Text)
+		if originalText == "" {
+			continue
+		}
 
-	// 设置字体路径
-	pti.setupFontForLanguage(generator, config.LangOut)
-
-	// 生成PDF配置
-	pdfConfig := BilingualPDFConfig{
-		Title:        originalContent.Metadata["title"],
-		Author:       originalContent.Metadata["author"],
-		Subject:      originalContent.Metadata["subject"],
-		Creator:      "PDF Math Translate (Go Native)",
-		SourceLang:   config.LangIn,
-		TargetLang:   config.LangOut,
-		ShowOriginal: true,
-		FontSize:     12,
-		LineSpacing:  6,
-		Margin:       20,
+		// 查找对应的翻译文本
+		for _, translatedBlock := range translatedContent.TextBlocks {
+			if translatedBlock.PageNum == block.PageNum {
+				translatedText := strings.TrimSpace(translatedBlock.Text)
+				if translatedText != "" {
+					translations[originalText] = translatedText
+					break
+				}
+			}
+		}
 	}
 
-	// 如果没有标题，使用文件名
-	if pdfConfig.Title == "" {
-		pdfConfig.Title = filename
+	// 创建PDF文档对象用于样式保留替换
+	pdfDoc := &PDFDocument{
+		Path: inputPath,
+		Metadata: PDFMetadata{
+			Title:  originalContent.Metadata["title"],
+			Author: originalContent.Metadata["author"],
+			Pages:  len(originalContent.TextBlocks),
+		},
 	}
 
-	// 生成单语PDF（翻译版）
+	// 生成单语PDF（翻译版）- 使用文本替换保留样式
 	monoFile := filepath.Join(outputDir, filename+"-mono.pdf")
-	if err := generator.GenerateMonolingualPDF(translatedContent, monoFile, pdfConfig); err != nil {
+	if err := pdfDoc.SaveMonolingualPDFWithReplacement(monoFile, translations); err != nil {
 		return nil, fmt.Errorf("生成单语PDF失败: %w", err)
 	}
 
-	// 生成双语PDF
+	// 生成双语PDF - 使用文本替换保留样式
 	dualFile := filepath.Join(outputDir, filename+"-dual.pdf")
-	if err := generator.GenerateBilingualPDF(originalContent, translatedContent, dualFile, pdfConfig); err != nil {
+	if err := pdfDoc.SaveBilingualPDFWithReplacement(dualFile, translations, BilingualLayoutTopBottom); err != nil {
 		return nil, fmt.Errorf("生成双语PDF失败: %w", err)
 	}
 
@@ -192,27 +197,10 @@ func (pti *PDFTranslatorIntegration) generateOutputFiles(originalContent, transl
 	return result, nil
 }
 
-// setupFontForLanguage 根据语言设置字体
-func (pti *PDFTranslatorIntegration) setupFontForLanguage(generator *PDFGenerator, langOut string) {
-	// 根据目标语言选择合适的字体
-	fontMap := map[string]string{
-		"zh":    "fonts/SourceHanSerif-Regular.ttf",
-		"zh-cn": "fonts/SourceHanSerif-Regular.ttf",
-		"zh-tw": "fonts/SourceHanSerif-Regular.ttf",
-		"ja":    "fonts/SourceHanSerif-Regular.ttf",
-		"ko":    "fonts/SourceHanSerif-Regular.ttf",
-		"ar":    "fonts/NotoSansArabic-Regular.ttf",
-		"hi":    "fonts/NotoSansDevanagari-Regular.ttf",
-		"th":    "fonts/NotoSansThai-Regular.ttf",
-		"ru":    "fonts/NotoSans-Regular.ttf",
-	}
-
-	if fontPath, exists := fontMap[strings.ToLower(langOut)]; exists {
-		if fileExistsInternal(fontPath) {
-			generator.FontPath = fontPath
-			log.Printf("设置字体: %s", fontPath)
-		}
-	}
+// setupFontForLanguage 根据语言设置字体 - 保留用于兼容性，但不再使用PDF生成器
+func (pti *PDFTranslatorIntegration) setupFontForLanguage(generator interface{}, langOut string) {
+	// 这个方法保留用于兼容性，但现在使用样式保留替换器，不再需要手动设置字体
+	log.Printf("使用样式保留替换器，自动处理字体: %s", langOut)
 }
 
 // fileExistsInternal 检查文件是否存在（内部使用）

@@ -8,10 +8,9 @@ import (
 	"strings"
 )
 
-// PDFMathTranslator PDF数学翻译器（Go原生实现）
+// PDFMathTranslator PDF数学翻译器（Go原生实现）- 使用文本替换保留样式
 type PDFMathTranslator struct {
 	Parser      *PDFParser
-	Generator   *PDFGenerator
 	FontPath    string
 	Integration *PDFTranslatorIntegration
 }
@@ -44,7 +43,6 @@ type PDFMathResult struct {
 func NewPDFMathTranslator() *PDFMathTranslator {
 	return &PDFMathTranslator{
 		Parser:      NewPDFParser("", ""), // 可配置公式检测规则
-		Generator:   NewPDFGenerator(""),  // 可配置字体路径
 		FontPath:    "",                   // 将根据目标语言自动选择
 		Integration: nil,                  // 将在需要时设置
 	}
@@ -109,47 +107,63 @@ func (pmt *PDFMathTranslator) TranslatePDF(inputPath, outputDir string, config P
 	translatedContent := *content // 复制原内容
 	pmt.Parser.ApplyTranslations(&translatedContent, translations)
 
-	// 5. 生成输出文件
+	// 5. 生成输出文件 - 使用文本替换保留样式
 	if progressCallback != nil {
 		progressCallback(0.8)
 	}
 
 	filename := strings.TrimSuffix(filepath.Base(inputPath), filepath.Ext(inputPath))
 
-	// 生成PDF配置
-	pdfConfig := BilingualPDFConfig{
-		Title:        content.Metadata["title"],
-		Author:       content.Metadata["author"],
-		Subject:      content.Metadata["subject"],
-		Creator:      "PDF Math Translate (Go)",
-		SourceLang:   config.LangIn,
-		TargetLang:   config.LangOut,
-		ShowOriginal: true,
-		FontSize:     12,
-		LineSpacing:  6,
-		Margin:       20,
+	// 构建翻译映射
+	translationMap := make(map[string]string)
+	for _, block := range content.TextBlocks {
+		originalText := strings.TrimSpace(block.Text)
+		if originalText == "" {
+			continue
+		}
+
+		// 查找对应的翻译文本
+		for _, translatedBlock := range translatedContent.TextBlocks {
+			if translatedBlock.PageNum == block.PageNum {
+				translatedText := strings.TrimSpace(translatedBlock.Text)
+				if translatedText != "" {
+					translationMap[originalText] = translatedText
+					break
+				}
+			}
+		}
+	}
+
+	// 创建PDF文档对象用于样式保留替换
+	pdfDoc := &PDFDocument{
+		Path: inputPath,
+		Metadata: PDFMetadata{
+			Title:  content.Metadata["title"],
+			Author: content.Metadata["author"],
+			Pages:  len(content.TextBlocks),
+		},
 	}
 
 	// 根据生成模式决定生成哪些文件
 	var monoFile, dualFile string
 
 	if config.GenerateMode == "monolingual" {
-		// 单语模式：只生成单语PDF
+		// 单语模式：只生成单语PDF - 使用文本替换保留样式
 		monoFile = filepath.Join(outputDir, filename+"-mono.pdf")
-		if err := pmt.Generator.GenerateMonolingualPDF(&translatedContent, monoFile, pdfConfig); err != nil {
+		if err := pdfDoc.SaveMonolingualPDFWithReplacement(monoFile, translationMap); err != nil {
 			return nil, fmt.Errorf("生成单语PDF失败: %w", err)
 		}
 		log.Printf("单语模式：生成单语PDF: %s", monoFile)
 	} else {
-		// 双语模式（默认）：生成双语PDF，可选生成单语PDF
+		// 双语模式（默认）：生成双语PDF，可选生成单语PDF - 使用文本替换保留样式
 		dualFile = filepath.Join(outputDir, filename+"-dual.pdf")
-		if err := pmt.Generator.GenerateBilingualPDF(content, &translatedContent, dualFile, pdfConfig); err != nil {
+		if err := pdfDoc.SaveBilingualPDFWithReplacement(dualFile, translationMap, BilingualLayoutTopBottom); err != nil {
 			return nil, fmt.Errorf("生成双语PDF失败: %w", err)
 		}
 
 		// 也生成单语版本作为备选
 		monoFile = filepath.Join(outputDir, filename+"-mono.pdf")
-		if err := pmt.Generator.GenerateMonolingualPDF(&translatedContent, monoFile, pdfConfig); err != nil {
+		if err := pdfDoc.SaveMonolingualPDFWithReplacement(monoFile, translationMap); err != nil {
 			log.Printf("警告：生成单语PDF失败: %v", err)
 			// 双语模式下，单语PDF失败不应该导致整个任务失败
 		}
@@ -181,7 +195,7 @@ func (pmt *PDFMathTranslator) TranslatePDF(inputPath, outputDir string, config P
 	return result, nil
 }
 
-// setupFont 设置字体路径
+// setupFont 设置字体路径 - 保留用于兼容性，现在使用样式保留替换器自动处理字体
 func (pmt *PDFMathTranslator) setupFont(langOut string) {
 	// 使用系统字体检测器
 	detector := NewSystemFontDetector()
@@ -190,7 +204,6 @@ func (pmt *PDFMathTranslator) setupFont(langOut string) {
 	systemFontPath := detector.GetSystemFontPath(langOut)
 	if systemFontPath != "" {
 		pmt.FontPath = systemFontPath
-		pmt.Generator.FontPath = systemFontPath
 		log.Printf("为语言 %s 选择系统字体: %s", langOut, systemFontPath)
 	} else {
 		log.Printf("警告：未找到语言 %s 的合适字体", langOut)
@@ -198,7 +211,6 @@ func (pmt *PDFMathTranslator) setupFont(langOut string) {
 
 		// 清空字体路径，使用默认处理
 		pmt.FontPath = ""
-		pmt.Generator.FontPath = ""
 	}
 }
 
