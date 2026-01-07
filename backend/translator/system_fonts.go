@@ -40,9 +40,7 @@ func (sfd *SystemFontDetector) getWindowsFont(language string) string {
 	switch strings.ToLower(language) {
 	case "zh", "chinese", "zh-cn", "zh-tw", "zh-hk":
 		fontCandidates = []string{
-			"msyh.ttc",     // 微软雅黑
-			"msyhbd.ttc",   // 微软雅黑 Bold
-			"simsun.ttc",   // 宋体
+			// 优先选择 TTF 格式字体，避免 TTC 格式
 			"simhei.ttf",   // 黑体
 			"simkai.ttf",   // 楷体
 			"STZHONGS.TTF", // 华文中宋
@@ -50,6 +48,12 @@ func (sfd *SystemFontDetector) getWindowsFont(language string) string {
 			"STKAITI.TTF",  // 华文楷体
 			"STSONG.TTF",   // 华文宋体
 			"STXIHEI.TTF",  // 华文细黑
+			"arial.ttf",    // Arial (备用，支持部分中文)
+			"tahoma.ttf",   // Tahoma (备用)
+			// TTC 格式放在最后，作为备用
+			"msyh.ttc",   // 微软雅黑
+			"msyhbd.ttc", // 微软雅黑 Bold
+			"simsun.ttc", // 宋体
 		}
 	case "ja", "japanese":
 		fontCandidates = []string{
@@ -344,9 +348,29 @@ func (sfd *SystemFontDetector) findFirstExistingFont(baseDir string, candidates 
 	for _, candidate := range candidates {
 		fullPath := filepath.Join(baseDir, candidate)
 		if fileExists(fullPath) {
-			log.Printf("找到系统字体: %s", fullPath)
-			return fullPath
+			// 检查字体格式是否支持
+			if sfd.isSupportedFontFormat(fullPath) {
+				log.Printf("找到系统字体: %s", fullPath)
+				return fullPath
+			} else {
+				log.Printf("跳过不支持的字体格式: %s", fullPath)
+			}
 		}
 	}
 	return ""
+}
+
+// isSupportedFontFormat 检查字体格式是否被 gofpdf 支持
+func (sfd *SystemFontDetector) isSupportedFontFormat(fontPath string) bool {
+	ext := strings.ToLower(filepath.Ext(fontPath))
+	switch ext {
+	case ".ttf", ".otf":
+		return true
+	case ".ttc":
+		// TTC 格式不被 gofpdf 支持
+		log.Printf("警告：TTC 格式字体不被支持: %s", fontPath)
+		return false
+	default:
+		return false
+	}
 }
