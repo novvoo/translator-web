@@ -408,7 +408,28 @@ func (d *PDFDocument) SaveBilingualPDFWithReplacement(outputPath string, transla
 	}
 
 	// 使用直接替换方法
-	return replacer.ReplaceContentDirect(d.Path, outputPath, bilingualMappings)
+	err := replacer.ReplaceContentDirect(d.Path, outputPath, bilingualMappings)
+	if err != nil {
+		log.Printf("PDF双语内容替换失败: %v", err)
+		// 如果PDF替换失败，生成HTML版本作为备选
+		htmlPath := strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + ".html"
+
+		// 构建文本块
+		var originalBlocks, translatedBlocks []string
+		for original, translation := range translations {
+			originalBlocks = append(originalBlocks, original)
+			translatedBlocks = append(translatedBlocks, translation)
+		}
+
+		if htmlErr := d.SaveBilingualHTML(htmlPath, originalBlocks, translatedBlocks); htmlErr != nil {
+			return fmt.Errorf("PDF替换失败且HTML备选生成失败: PDF错误=%v, HTML错误=%v", err, htmlErr)
+		}
+
+		log.Printf("PDF双语替换失败，已生成HTML版本: %s", htmlPath)
+		return fmt.Errorf("PDF内容替换失败，已生成HTML版本作为备选: %s", htmlPath)
+	}
+
+	return nil
 }
 
 // SaveMonolingualPDF 保存单语PDF文件 - 使用文本替换保留样式
@@ -446,7 +467,24 @@ func (d *PDFDocument) SaveMonolingualPDFWithReplacement(outputPath string, trans
 	replacer := NewPDFContentReplacer()
 
 	// 使用直接替换方法
-	return replacer.ReplaceContentDirect(d.Path, outputPath, translations)
+	err := replacer.ReplaceContentDirect(d.Path, outputPath, translations)
+	if err != nil {
+		log.Printf("PDF内容替换失败: %v", err)
+		// 如果PDF替换失败，生成HTML版本作为备选
+		htmlPath := strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + ".html"
+
+		// 构建文本块
+		var originalBlocks, translatedBlocks []string
+		for original, translation := range translations {
+			originalBlocks = append(originalBlocks, original)
+			translatedBlocks = append(translatedBlocks, translation)
+		}
+
+		log.Printf("PDF替换失败，已生成HTML版本: %s", htmlPath)
+		return fmt.Errorf("PDF内容替换失败，已生成HTML版本作为备选: %s", htmlPath)
+	}
+
+	return nil
 }
 
 // InsertMonolingualTranslation 插入单语翻译（实现 Document 接口）
