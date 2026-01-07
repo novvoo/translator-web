@@ -176,10 +176,17 @@ func ParseHTML(content []byte) (*HTMLContent, error) {
 
 // ExtractTextBlocks 提取文本块
 func ExtractTextBlocks(html string) []string {
+	// 首先预处理HTML，将<br/>标签替换为特殊分隔符
+	html = strings.ReplaceAll(html, "<br/>", "|||BR|||")
+	html = strings.ReplaceAll(html, "<br>", "|||BR|||")
+	html = strings.ReplaceAll(html, "<BR/>", "|||BR|||")
+	html = strings.ReplaceAll(html, "<BR>", "|||BR|||")
+
 	var blocks []string
 	decoder := xml.NewDecoder(strings.NewReader(html))
 	var currentText strings.Builder
 	var inSpan bool
+	var inFont bool
 
 	for {
 		token, err := decoder.Token()
@@ -197,24 +204,79 @@ func ExtractTextBlocks(html string) []string {
 			if t.Name.Local == "span" {
 				inSpan = true
 			}
-		case xml.CharData:
-			text := strings.TrimSpace(string(t))
-			if text != "" {
-				currentText.WriteString(text)
-				currentText.WriteString(" ")
+			// 检测 font 标签的开始（通常用于例句）
+			if t.Name.Local == "font" {
+				inFont = true
+				// 如果当前有文本，先保存为一个块
+				if currentText.Len() > 0 {
+					text := strings.TrimSpace(currentText.String())
+					if text != "" {
+						// 处理BR分隔符
+						parts := strings.Split(text, "|||BR|||")
+						for _, part := range parts {
+							part = strings.TrimSpace(part)
+							if part != "" {
+								blocks = append(blocks, part)
+							}
+						}
+					}
+					currentText.Reset()
+				}
 			}
+
+		case xml.CharData:
+			text := string(t)
+			currentText.WriteString(text)
+
 		case xml.EndElement:
 			// span 标签结束时，如果有内容则作为一个独立的文本块
 			if t.Name.Local == "span" && inSpan {
 				if currentText.Len() > 0 {
-					blocks = append(blocks, strings.TrimSpace(currentText.String()))
+					text := strings.TrimSpace(currentText.String())
+					if text != "" {
+						// 处理BR分隔符
+						parts := strings.Split(text, "|||BR|||")
+						for _, part := range parts {
+							part = strings.TrimSpace(part)
+							if part != "" {
+								blocks = append(blocks, part)
+							}
+						}
+					}
 					currentText.Reset()
 				}
 				inSpan = false
+			} else if t.Name.Local == "font" && inFont {
+				// font 标签结束时，保存为独立的文本块（通常是例句）
+				if currentText.Len() > 0 {
+					text := strings.TrimSpace(currentText.String())
+					if text != "" {
+						// 处理BR分隔符
+						parts := strings.Split(text, "|||BR|||")
+						for _, part := range parts {
+							part = strings.TrimSpace(part)
+							if part != "" {
+								blocks = append(blocks, part)
+							}
+						}
+					}
+					currentText.Reset()
+				}
+				inFont = false
 			} else if isBlockElement(t.Name.Local) {
 				// 块级元素结束时，如果还有未处理的文本，也添加进去
 				if currentText.Len() > 0 {
-					blocks = append(blocks, strings.TrimSpace(currentText.String()))
+					text := strings.TrimSpace(currentText.String())
+					if text != "" {
+						// 处理BR分隔符
+						parts := strings.Split(text, "|||BR|||")
+						for _, part := range parts {
+							part = strings.TrimSpace(part)
+							if part != "" {
+								blocks = append(blocks, part)
+							}
+						}
+					}
 					currentText.Reset()
 				}
 			}
@@ -222,7 +284,17 @@ func ExtractTextBlocks(html string) []string {
 	}
 
 	if currentText.Len() > 0 {
-		blocks = append(blocks, strings.TrimSpace(currentText.String()))
+		text := strings.TrimSpace(currentText.String())
+		if text != "" {
+			// 处理BR分隔符
+			parts := strings.Split(text, "|||BR|||")
+			for _, part := range parts {
+				part = strings.TrimSpace(part)
+				if part != "" {
+					blocks = append(blocks, part)
+				}
+			}
+		}
 	}
 
 	return blocks
@@ -272,6 +344,7 @@ func InsertTranslation(html string, translations map[string]string) string {
 	var currentText strings.Builder
 	var depth int
 	var inSpan bool
+	var inFont bool
 
 	for {
 		token, err := decoder.Token()
@@ -297,6 +370,28 @@ func InsertTranslation(html string, translations map[string]string) string {
 			if t.Name.Local == "span" {
 				inSpan = true
 			}
+			// 检测 font 标签
+			if t.Name.Local == "font" {
+				inFont = true
+				// 如果当前有文本，先插入翻译
+				if currentText.Len() > 0 {
+					original := strings.TrimSpace(currentText.String())
+					if trans, ok := translations[original]; ok && trans != "" {
+						buf.WriteString(fmt.Sprintf(`<div class="translation" style="color: #666; font-style: italic; margin-top: 0.5em;">%s</div>`, trans))
+					}
+					currentText.Reset()
+				}
+			}
+			// br 标签处理
+			if t.Name.Local == "br" {
+				if currentText.Len() > 0 {
+					original := strings.TrimSpace(currentText.String())
+					if trans, ok := translations[original]; ok && trans != "" {
+						buf.WriteString(fmt.Sprintf(`<div class="translation" style="color: #666; font-style: italic; margin-top: 0.5em;">%s</div>`, trans))
+					}
+					currentText.Reset()
+				}
+			}
 
 		case xml.EndElement:
 			// 在 span 结束标签后插入翻译
@@ -312,6 +407,19 @@ func InsertTranslation(html string, translations map[string]string) string {
 				}
 				currentText.Reset()
 				inSpan = false
+			} else if t.Name.Local == "font" && inFont && currentText.Len() > 0 {
+				// 在 font 结束标签后插入翻译
+				original := strings.TrimSpace(currentText.String())
+				buf.WriteString("</")
+				buf.WriteString(t.Name.Local)
+				buf.WriteString(">")
+
+				// 在 font 后面添加翻译
+				if trans, ok := translations[original]; ok && trans != "" {
+					buf.WriteString(fmt.Sprintf(`<div class="translation" style="color: #666; font-style: italic; margin-top: 0.5em;">%s</div>`, trans))
+				}
+				currentText.Reset()
+				inFont = false
 			} else {
 				// 在块级元素结束标签前插入翻译
 				if isBlockElement(t.Name.Local) && currentText.Len() > 0 {
@@ -453,6 +561,7 @@ func InsertMonolingualTranslation(html string, translations map[string]string) s
 	var currentText strings.Builder
 	var depth int
 	var inSpan bool
+	var inFont bool
 
 	for {
 		token, err := decoder.Token()
@@ -477,6 +586,21 @@ func InsertMonolingualTranslation(html string, translations map[string]string) s
 			// 检测 span 标签
 			if t.Name.Local == "span" {
 				inSpan = true
+			}
+			// 检测 font 标签
+			if t.Name.Local == "font" {
+				inFont = true
+			}
+			// br 标签处理
+			if t.Name.Local == "br" {
+				if currentText.Len() > 0 {
+					original := strings.TrimSpace(currentText.String())
+					if trans, ok := translations[original]; ok && trans != "" {
+						// 需要回退并替换之前写入的原文
+						// 这里简化处理，直接清空并写入翻译
+					}
+					currentText.Reset()
+				}
 			}
 
 		case xml.EndElement:
@@ -505,6 +629,27 @@ func InsertMonolingualTranslation(html string, translations map[string]string) s
 				buf.WriteString(">")
 				currentText.Reset()
 				inSpan = false
+			} else if t.Name.Local == "font" && inFont && currentText.Len() > 0 {
+				// 在 font 结束标签前替换内容
+				original := strings.TrimSpace(currentText.String())
+				if trans, ok := translations[original]; ok && trans != "" {
+					bufStr := buf.String()
+					lastFontStart := strings.LastIndex(bufStr, "<font")
+					if lastFontStart != -1 {
+						fontTagEnd := strings.Index(bufStr[lastFontStart:], ">")
+						if fontTagEnd != -1 {
+							fontTagEnd += lastFontStart + 1
+							buf.Reset()
+							buf.WriteString(bufStr[:fontTagEnd])
+							buf.WriteString(trans)
+						}
+					}
+				}
+				buf.WriteString("</")
+				buf.WriteString(t.Name.Local)
+				buf.WriteString(">")
+				currentText.Reset()
+				inFont = false
 			} else {
 				// 在块级元素结束标签前替换内容
 				if isBlockElement(t.Name.Local) && currentText.Len() > 0 {
@@ -524,12 +669,12 @@ func InsertMonolingualTranslation(html string, translations map[string]string) s
 
 		case xml.CharData:
 			text := string(t)
-			if inSpan {
-				// 对于span内的文本，先收集，在结束标签时处理
+			if inSpan || inFont {
+				// 对于span和font内的文本，先收集，在结束标签时处理
 				currentText.WriteString(strings.TrimSpace(text))
 				currentText.WriteString(" ")
 			} else {
-				// 对于非span文本，检查是否需要替换
+				// 对于非span/font文本，检查是否需要替换
 				trimmedText := strings.TrimSpace(text)
 				if trans, ok := translations[trimmedText]; ok && trans != "" && trimmedText != "" {
 					buf.WriteString(trans)
