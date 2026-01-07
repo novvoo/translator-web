@@ -8,7 +8,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Go 构建阶段
-FROM golang:1.21-alpine AS backend-builder
+FROM golang:1.24.1-alpine AS backend-builder
 
 WORKDIR /app
 COPY backend/go.mod backend/go.sum ./backend/
