@@ -387,36 +387,28 @@ func (d *PDFDocument) SaveBilingualPDF(outputPath string, originalBlocks, transl
 	return d.SaveBilingualPDFWithReplacement(outputPath, translations, BilingualLayoutTopBottom)
 }
 
-// SaveBilingualPDFWithReplacement 使用内容替换保存双语PDF
+// SaveBilingualPDFWithReplacement 使用内容替换保存双语PDF - 真正的PDF内容流替换
 func (d *PDFDocument) SaveBilingualPDFWithReplacement(outputPath string, translations map[string]string, layout PDFBilingualLayout) error {
-	log.Printf("使用内容替换保存双语PDF: %s", outputPath)
+	log.Printf("使用真正的内容流替换保存双语PDF: %s", outputPath)
 
-	// 创建替换请求
-	request := PDFReplacementRequest{
-		InputPath:       d.Path,
-		OutputDir:       filepath.Dir(outputPath),
-		Mode:            ReplacementModeBilingual,
-		BilingualLayout: layout,
-		PreserveStyle:   true,
-		FontScale:       0.9,
-		LineSpacing:     1.2,
+	// 创建内容替换器
+	replacer := NewPDFContentReplacer()
+
+	// 构建双语文本映射
+	bilingualMappings := make(map[string]string)
+	for original, translation := range translations {
+		switch layout {
+		case BilingualLayoutSideBySide:
+			bilingualMappings[original] = original + " | " + translation
+		case BilingualLayoutInterleaved:
+			bilingualMappings[original] = original + "\n" + translation
+		default: // BilingualLayoutTopBottom
+			bilingualMappings[original] = original + "\n" + translation
+		}
 	}
 
-	// 创建替换集成器（需要翻译客户端，这里简化处理）
-	replacer := NewPDFStylePreservingReplacer()
-
-	// 创建样式保留配置
-	config := StylePreservingConfig{
-		Mode:               "bilingual",
-		BilingualLayout:    string(layout),
-		PreserveFormatting: true,
-		FontScale:          request.FontScale,
-		LineSpacing:        request.LineSpacing,
-		MarginAdjustment:   0,
-		ColorPreservation:  true,
-	}
-
-	return replacer.ReplaceWithStylePreservation(d.Path, outputPath, translations, config)
+	// 使用直接替换方法
+	return replacer.ReplaceContentDirect(d.Path, outputPath, bilingualMappings)
 }
 
 // SaveMonolingualPDF 保存单语PDF文件 - 使用文本替换保留样式
@@ -446,25 +438,15 @@ func (d *PDFDocument) SaveMonolingualPDF(outputPath string, translatedBlocks []s
 	return d.SaveMonolingualPDFWithReplacement(outputPath, translations)
 }
 
-// SaveMonolingualPDFWithReplacement 使用内容替换保存单语PDF
+// SaveMonolingualPDFWithReplacement 使用内容替换保存单语PDF - 真正的PDF内容流替换
 func (d *PDFDocument) SaveMonolingualPDFWithReplacement(outputPath string, translations map[string]string) error {
-	log.Printf("使用内容替换保存单语PDF: %s", outputPath)
+	log.Printf("使用真正的内容流替换保存单语PDF: %s", outputPath)
 
-	// 创建替换器
-	replacer := NewPDFStylePreservingReplacer()
+	// 创建内容替换器
+	replacer := NewPDFContentReplacer()
 
-	// 创建样式保留配置
-	config := StylePreservingConfig{
-		Mode:               "monolingual",
-		BilingualLayout:    "",
-		PreserveFormatting: true,
-		FontScale:          1.0,
-		LineSpacing:        1.2,
-		MarginAdjustment:   0,
-		ColorPreservation:  true,
-	}
-
-	return replacer.ReplaceWithStylePreservation(d.Path, outputPath, translations, config)
+	// 使用直接替换方法
+	return replacer.ReplaceContentDirect(d.Path, outputPath, translations)
 }
 
 // InsertMonolingualTranslation 插入单语翻译（实现 Document 接口）

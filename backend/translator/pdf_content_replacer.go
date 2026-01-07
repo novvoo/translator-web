@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 )
 
 // PDFContentReplacer PDF内容替换器，保留原始样式
@@ -208,24 +210,42 @@ func (r *PDFContentReplacer) replaceBilingualInterleaved(outputPath string, repl
 	return r.performContentReplacement(outputPath, adjustedReplacements, config, false)
 }
 
-// performContentReplacement 执行实际的内容替换
+// performContentReplacement 执行实际的内容替换 - 使用pdfcpu直接操作PDF内容流
 func (r *PDFContentReplacer) performContentReplacement(filePath string, replacements []TextReplacement, config PDFReplacementConfig, isBilingual bool) error {
-	log.Printf("开始执行内容替换，共 %d 个替换项", len(replacements))
-
-	// 使用pdfcpu进行文本替换
-	// 注意：这是一个简化的实现，实际的PDF文本替换非常复杂
-	// 在实际应用中，可能需要使用更专业的PDF编辑库
+	log.Printf("开始执行PDF内容流替换，共 %d 个替换项", len(replacements))
 
 	// 1. 验证PDF文件
 	if err := api.ValidateFile(filePath, model.NewDefaultConfiguration()); err != nil {
 		return fmt.Errorf("PDF验证失败: %w", err)
 	}
 
-	// 2. 创建文本替换操作
-	// 由于pdfcpu的文本替换API比较复杂，这里提供一个框架
-	// 实际实现需要根据具体的PDF结构进行调整
+	// 2. 读取PDF上下文
+	ctx, err := api.ReadContextFile(filePath)
+	if err != nil {
+		return fmt.Errorf("读取PDF上下文失败: %w", err)
+	}
 
-	log.Printf("PDF内容替换完成")
+	// 3. 执行文本替换操作
+	modified := false
+	for _, replacement := range replacements {
+		if err := r.replaceTextInPage(ctx, replacement, config); err != nil {
+			log.Printf("警告：替换文本失败 (页面 %d): %v", replacement.PageNum, err)
+			continue
+		}
+		modified = true
+	}
+
+	if !modified {
+		log.Printf("没有执行任何文本替换")
+		return nil
+	}
+
+	// 4. 写回PDF文件
+	if err := api.WriteContextFile(ctx, filePath); err != nil {
+		return fmt.Errorf("写入PDF文件失败: %w", err)
+	}
+
+	log.Printf("PDF内容流替换完成，成功替换了文本")
 	return nil
 }
 
@@ -245,6 +265,313 @@ func (r *PDFContentReplacer) copyFile(src, dst string) error {
 
 	_, err = destFile.ReadFrom(sourceFile)
 	return err
+}
+
+// replaceTextInPage 在指定页面替换文本
+func (r *PDFContentReplacer) replaceTextInPage(ctx *model.Context, replacement TextReplacement, config PDFReplacementConfig) error {
+	// 获取页面对象
+	pageDict, _, _, err := ctx.PageDict(replacement.PageNum, false)
+	if err != nil {
+		return fmt.Errorf("获取页面字典失败: %w", err)
+	}
+
+	// 获取页面内容流
+	contentStreams, err := r.getPageContentStreams(ctx, pageDict)
+	if err != nil {
+		return fmt.Errorf("获取页面内容流失败: %w", err)
+	}
+
+	// 在内容流中查找并替换文本
+	modified := false
+	for i, stream := range contentStreams {
+		newContent, wasModified, err := r.replaceTextInContentStream(stream, replacement, config)
+		if err != nil {
+			log.Printf("警告：处理内容流 %d 失败: %v", i, err)
+			continue
+		}
+
+		if wasModified {
+			// 更新内容流
+			if err := r.updateContentStream(ctx, pageDict, i, newContent); err != nil {
+				return fmt.Errorf("更新内容流失败: %w", err)
+			}
+			modified = true
+		}
+	}
+
+	if !modified {
+		return fmt.Errorf("在页面 %d 中未找到文本: %s", replacement.PageNum, replacement.Original)
+	}
+
+	return nil
+}
+
+// getPageContentStreams 获取页面的所有内容流
+func (r *PDFContentReplacer) getPageContentStreams(ctx *model.Context, pageDict types.Dict) ([]string, error) {
+	var streams []string
+
+	// 获取Contents对象
+	contentsObj, found := pageDict.Find("Contents")
+	if !found {
+		return streams, fmt.Errorf("页面没有Contents对象")
+	}
+
+	switch obj := contentsObj.(type) {
+	case types.IndirectRef:
+		// 单个内容流
+		streamDict, _, err := ctx.DereferenceStreamDict(obj)
+		if err != nil {
+			return streams, fmt.Errorf("解引用内容流失败: %w", err)
+		}
+
+		content, err := r.decodeStreamContent(streamDict)
+		if err != nil {
+			return streams, fmt.Errorf("解码内容流失败: %w", err)
+		}
+
+		streams = append(streams, content)
+
+	case types.Array:
+		// 多个内容流
+		for _, item := range obj {
+			if ref, ok := item.(types.IndirectRef); ok {
+				streamDict, _, err := ctx.DereferenceStreamDict(ref)
+				if err != nil {
+					log.Printf("警告：解引用内容流失败: %v", err)
+					continue
+				}
+
+				content, err := r.decodeStreamContent(streamDict)
+				if err != nil {
+					log.Printf("警告：解码内容流失败: %v", err)
+					continue
+				}
+
+				streams = append(streams, content)
+			}
+		}
+
+	default:
+		return streams, fmt.Errorf("不支持的Contents对象类型: %T", obj)
+	}
+
+	return streams, nil
+}
+
+// decodeStreamContent 解码流内容
+func (r *PDFContentReplacer) decodeStreamContent(streamDict *types.StreamDict) (string, error) {
+	// 直接返回流内容，pdfcpu会自动处理解码
+	if streamDict.Content != nil {
+		return string(streamDict.Content), nil
+	}
+	return "", fmt.Errorf("流内容为空")
+}
+
+// replaceTextInContentStream 在内容流中替换文本
+func (r *PDFContentReplacer) replaceTextInContentStream(content string, replacement TextReplacement, config PDFReplacementConfig) (string, bool, error) {
+	// PDF内容流使用特殊的文本操作符
+	// 主要的文本操作符：
+	// - Tj: 显示文本字符串
+	// - TJ: 显示带有个别字形定位的文本字符串
+	// - ': 移动到下一行并显示文本字符串
+	// - ": 设置字符和单词间距，移动到下一行并显示文本字符串
+
+	modified := false
+	newContent := content
+
+	// 查找文本显示操作符并替换
+	// 构建替换文本
+	replacementText := r.buildReplacementText(replacement, config)
+
+	// 执行替换
+	oldText := "(" + replacement.Original + ")"
+	newText := "(" + replacementText + ")"
+
+	if strings.Contains(newContent, oldText) {
+		newContent = strings.ReplaceAll(newContent, oldText, newText)
+		modified = true
+		log.Printf("替换文本: '%s' -> '%s'", replacement.Original, replacementText)
+	}
+
+	// 处理十六进制编码的文本 <text>
+	hexPattern := r.stringToHex(replacement.Original)
+	if strings.Contains(newContent, "<"+hexPattern+">") {
+		replacementHex := r.stringToHex(replacementText)
+		oldHex := "<" + hexPattern + ">"
+		newHex := "<" + replacementHex + ">"
+
+		newContent = strings.ReplaceAll(newContent, oldHex, newHex)
+		modified = true
+		log.Printf("替换十六进制文本: '%s' -> '%s'", hexPattern, replacementHex)
+	}
+
+	return newContent, modified, nil
+}
+
+// buildReplacementText 构建替换文本
+func (r *PDFContentReplacer) buildReplacementText(replacement TextReplacement, config PDFReplacementConfig) string {
+	switch config.Mode {
+	case "monolingual":
+		return replacement.Translation
+	case "bilingual":
+		switch config.BilingualStyle {
+		case "interleaved":
+			return replacement.Original + "\\n" + replacement.Translation
+		case "side-by-side":
+			return replacement.Original + " | " + replacement.Translation
+		default: // top-bottom
+			return replacement.Original + "\\n" + replacement.Translation
+		}
+	default:
+		return replacement.Translation
+	}
+}
+
+// stringToHex 将字符串转换为十六进制
+func (r *PDFContentReplacer) stringToHex(text string) string {
+	result := ""
+	for _, char := range []byte(text) {
+		result += fmt.Sprintf("%02X", char)
+	}
+	return result
+}
+
+// updateContentStream 更新内容流
+func (r *PDFContentReplacer) updateContentStream(ctx *model.Context, pageDict types.Dict, streamIndex int, newContent string) error {
+	// 获取Contents对象
+	contentsObj, found := pageDict.Find("Contents")
+	if !found {
+		return fmt.Errorf("页面没有Contents对象")
+	}
+
+	switch obj := contentsObj.(type) {
+	case types.IndirectRef:
+		// 单个内容流
+		if streamIndex != 0 {
+			return fmt.Errorf("流索引超出范围")
+		}
+		return r.updateSingleContentStream(ctx, obj, newContent)
+
+	case types.Array:
+		// 多个内容流
+		if streamIndex >= len(obj) {
+			return fmt.Errorf("流索引超出范围")
+		}
+
+		if ref, ok := obj[streamIndex].(types.IndirectRef); ok {
+			return r.updateSingleContentStream(ctx, ref, newContent)
+		}
+		return fmt.Errorf("无效的内容流引用")
+
+	default:
+		return fmt.Errorf("不支持的Contents对象类型: %T", obj)
+	}
+}
+
+// updateSingleContentStream 更新单个内容流
+func (r *PDFContentReplacer) updateSingleContentStream(ctx *model.Context, ref types.IndirectRef, newContent string) error {
+	// 获取流字典
+	streamDict, _, err := ctx.DereferenceStreamDict(ref)
+	if err != nil {
+		return fmt.Errorf("解引用流字典失败: %w", err)
+	}
+
+	// 更新流内容
+	streamDict.Content = []byte(newContent)
+
+	// 更新长度
+	streamLength := int64(len(newContent))
+	streamDict.StreamLength = &streamLength
+	if streamDict.Dict != nil {
+		streamDict.Dict.Update("Length", types.Integer(len(newContent)))
+	}
+
+	// 标记为已修改
+	ctx.Write.BinaryTotalSize += int64(len(newContent))
+
+	log.Printf("成功更新内容流，新长度: %d 字节", len(newContent))
+	return nil
+}
+
+// ReplaceContentDirect 直接替换PDF内容的简化接口
+func (r *PDFContentReplacer) ReplaceContentDirect(inputPath, outputPath string, textMappings map[string]string) error {
+	log.Printf("开始直接替换PDF内容: %s -> %s", inputPath, outputPath)
+
+	// 复制文件
+	if err := r.copyFile(inputPath, outputPath); err != nil {
+		return fmt.Errorf("复制文件失败: %w", err)
+	}
+
+	// 读取PDF上下文
+	ctx, err := api.ReadContextFile(outputPath)
+	if err != nil {
+		return fmt.Errorf("读取PDF上下文失败: %w", err)
+	}
+
+	// 遍历所有页面进行文本替换
+	pageCount := ctx.PageCount
+	modified := false
+
+	for pageNum := 1; pageNum <= pageCount; pageNum++ {
+		pageDict, _, _, err := ctx.PageDict(pageNum, false)
+		if err != nil {
+			log.Printf("警告：获取页面 %d 失败: %v", pageNum, err)
+			continue
+		}
+
+		// 获取页面内容流
+		contentStreams, err := r.getPageContentStreams(ctx, pageDict)
+		if err != nil {
+			log.Printf("警告：获取页面 %d 内容流失败: %v", pageNum, err)
+			continue
+		}
+
+		// 在每个内容流中查找并替换文本
+		for i, stream := range contentStreams {
+			newContent := stream
+			streamModified := false
+
+			// 对每个文本映射进行替换
+			for original, translation := range textMappings {
+				if strings.Contains(newContent, "("+original+")") {
+					newContent = strings.ReplaceAll(newContent, "("+original+")", "("+translation+")")
+					streamModified = true
+					log.Printf("页面 %d: 替换 '%s' -> '%s'", pageNum, original, translation)
+				}
+
+				// 处理十六进制编码
+				hexOriginal := r.stringToHex(original)
+				hexTranslation := r.stringToHex(translation)
+				if strings.Contains(newContent, "<"+hexOriginal+">") {
+					newContent = strings.ReplaceAll(newContent, "<"+hexOriginal+">", "<"+hexTranslation+">")
+					streamModified = true
+					log.Printf("页面 %d: 替换十六进制 '%s' -> '%s'", pageNum, hexOriginal, hexTranslation)
+				}
+			}
+
+			// 如果内容被修改，更新内容流
+			if streamModified {
+				if err := r.updateContentStream(ctx, pageDict, i, newContent); err != nil {
+					log.Printf("警告：更新页面 %d 内容流 %d 失败: %v", pageNum, i, err)
+				} else {
+					modified = true
+				}
+			}
+		}
+	}
+
+	if !modified {
+		log.Printf("没有找到需要替换的文本")
+		return nil
+	}
+
+	// 写回PDF文件
+	if err := api.WriteContextFile(ctx, outputPath); err != nil {
+		return fmt.Errorf("写入PDF文件失败: %w", err)
+	}
+
+	log.Printf("PDF直接内容替换完成")
+	return nil
 }
 
 // ReplaceContentWithAdvancedMethod 使用高级方法替换PDF内容
