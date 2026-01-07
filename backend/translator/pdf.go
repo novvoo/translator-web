@@ -29,6 +29,10 @@ type PDFMetadata struct {
 func OpenPDF(path string) (*PDFDocument, error) {
 	file, reader, err := pdf.Open(path)
 	if err != nil {
+		// 提供更友好的错误信息
+		if strings.Contains(err.Error(), "stream not present") {
+			return nil, fmt.Errorf("PDF文件格式不受支持或已损坏。此PDF可能使用了特殊编码、加密或压缩方式。建议：1) 尝试使用其他PDF工具重新保存该文件 2) 确保PDF未加密 3) 使用标准PDF格式")
+		}
 		return nil, fmt.Errorf("无法打开 PDF 文件: %w", err)
 	}
 	defer file.Close()
@@ -200,6 +204,10 @@ func ValidatePDF(filePath string) error {
 	// 尝试打开文件验证格式
 	file, _, err := pdf.Open(filePath)
 	if err != nil {
+		// 提供更友好的错误信息
+		if strings.Contains(err.Error(), "stream not present") {
+			return fmt.Errorf("PDF文件格式不受支持或已损坏。此PDF可能使用了特殊编码、加密或压缩方式。建议：1) 尝试使用其他PDF工具重新保存该文件 2) 确保PDF未加密 3) 使用标准PDF格式")
+		}
 		return fmt.Errorf("无效的 PDF 文件: %w", err)
 	}
 	file.Close()

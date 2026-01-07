@@ -12,7 +12,8 @@ import (
 
 // PDFGenerator PDF生成器
 type PDFGenerator struct {
-	FontPath string
+	FontPath     string
+	FontDetector *SystemFontDetector
 }
 
 // BilingualPDFConfig 双语PDF配置
@@ -32,7 +33,8 @@ type BilingualPDFConfig struct {
 // NewPDFGenerator 创建PDF生成器
 func NewPDFGenerator(fontPath string) *PDFGenerator {
 	return &PDFGenerator{
-		FontPath: fontPath,
+		FontPath:     fontPath,
+		FontDetector: NewSystemFontDetector(),
 	}
 }
 
@@ -108,14 +110,37 @@ func (g *PDFGenerator) GenerateMonolingualPDF(content *PDFContent, outputPath st
 
 // addFonts 添加字体支持
 func (g *PDFGenerator) addFonts(pdf *gofpdf.Fpdf) error {
-	// 添加中文字体支持
+	// 尝试添加字体支持
+	var fontPath string
+	var fontName string
+
 	if g.FontPath != "" && fileExists(g.FontPath) {
-		fontName := strings.TrimSuffix(filepath.Base(g.FontPath), filepath.Ext(g.FontPath))
-		pdf.AddUTF8Font(fontName, "", g.FontPath)
-		log.Printf("添加字体: %s", fontName)
+		// 使用指定的字体路径
+		fontPath = g.FontPath
+		fontName = strings.TrimSuffix(filepath.Base(g.FontPath), filepath.Ext(g.FontPath))
+	} else {
+		// 自动检测系统字体
+		// 这里我们假设目标语言是中文，实际使用时应该从配置中获取
+		systemFontPath := g.FontDetector.GetSystemFontPath("zh")
+		if systemFontPath != "" {
+			fontPath = systemFontPath
+			fontName = strings.TrimSuffix(filepath.Base(systemFontPath), filepath.Ext(systemFontPath))
+			log.Printf("自动选择系统字体: %s", systemFontPath)
+		}
 	}
 
-	return nil
+	if fontPath != "" {
+		pdf.AddUTF8Font(fontName, "", fontPath)
+		log.Printf("添加字体: %s (%s)", fontName, fontPath)
+
+		// 将字体名称保存到生成器中，供后续使用
+		g.FontPath = fontPath
+		return nil
+	} else {
+		log.Printf("警告：未找到合适的字体，将使用默认字体（可能无法正确显示中文）")
+		log.Printf("提示：请确保系统已安装中文字体")
+		return nil
+	}
 }
 
 // generatePages 生成双语页面
@@ -155,7 +180,7 @@ func (g *PDFGenerator) generatePages(pdf *gofpdf.Fpdf, originalContent, translat
 			pdf.Ln(10)
 
 			// 使用中文字体（如果可用）
-			if g.FontPath != "" {
+			if g.FontPath != "" && fileExists(g.FontPath) {
 				fontName := strings.TrimSuffix(filepath.Base(g.FontPath), filepath.Ext(g.FontPath))
 				pdf.SetFont(fontName, "", config.FontSize)
 			} else {
@@ -184,7 +209,7 @@ func (g *PDFGenerator) generateMonoPages(pdf *gofpdf.Fpdf, content *PDFContent, 
 
 		if blocks, exists := pages[pageNum]; exists {
 			// 使用适当的字体
-			if g.FontPath != "" {
+			if g.FontPath != "" && fileExists(g.FontPath) {
 				fontName := strings.TrimSuffix(filepath.Base(g.FontPath), filepath.Ext(g.FontPath))
 				pdf.SetFont(fontName, "", config.FontSize)
 			} else {
@@ -229,7 +254,7 @@ func (g *PDFGenerator) renderTextBlocks(pdf *gofpdf.Fpdf, blocks []TextBlock, co
 				pdf.SetFont("Arial", "I", config.FontSize-1) // 公式用斜体
 				pdf.SetTextColor(0, 0, 128)                  // 蓝色
 			} else {
-				if g.FontPath != "" {
+				if g.FontPath != "" && fileExists(g.FontPath) {
 					fontName := strings.TrimSuffix(filepath.Base(g.FontPath), filepath.Ext(g.FontPath))
 					pdf.SetFont(fontName, "", config.FontSize)
 				} else {

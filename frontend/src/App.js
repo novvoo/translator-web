@@ -382,13 +382,15 @@ function App() {
             </Button>
             {file && file.name.toLowerCase().endsWith('.pdf') && (
               <Alert severity="info" sx={{ mt: 1 }}>
-                📄 PDF 文件支持两种翻译模式：
+                📄 PDF 翻译说明：
                 <br />
-                • <strong>高级模式</strong>：使用 PDFMathTranslate，完美保留布局、公式和图表（推荐）
+                • 使用 Go 原生 PDF 解析器，智能提取文本内容
                 <br />
-                • <strong>基础模式</strong>：转换为 HTML 格式，提供双语对照阅读体验
+                • 支持数学公式识别和保留
                 <br />
-                系统将自动选择最佳模式
+                • 输出双语对照的 PDF 文件
+                <br />
+                • 如遇到格式不兼容的 PDF，系统会自动尝试简化处理
               </Alert>
             )}
           </Grid>

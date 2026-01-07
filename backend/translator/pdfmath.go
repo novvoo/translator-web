@@ -74,6 +74,10 @@ func (pmt *PDFMathTranslator) TranslatePDF(inputPath, outputDir string, config P
 
 	content, err := pmt.Parser.ParsePDF(inputPath)
 	if err != nil {
+		// 检查是否是PDF格式问题，提供更友好的错误信息
+		if strings.Contains(err.Error(), "stream not present") || strings.Contains(err.Error(), "PDF文件格式不受支持") {
+			return nil, fmt.Errorf("PDF文件格式不兼容。此PDF可能使用了特殊编码、加密或压缩方式。建议：\n1. 使用其他PDF工具（如Adobe Acrobat、PDFtk等）重新保存该文件\n2. 确保PDF未加密且可以正常复制文本\n3. 尝试将PDF转换为标准格式后再上传")
+		}
 		return nil, fmt.Errorf("解析PDF失败: %w", err)
 	}
 
@@ -84,7 +88,7 @@ func (pmt *PDFMathTranslator) TranslatePDF(inputPath, outputDir string, config P
 
 	texts := pmt.Parser.GetTextForTranslation(content)
 	if len(texts) == 0 {
-		return nil, fmt.Errorf("PDF中没有可翻译的文本")
+		return nil, fmt.Errorf("PDF中没有可翻译的文本内容。可能原因：\n1. PDF是扫描版图片，需要先进行OCR识别\n2. PDF文本被加密或使用特殊编码\n3. PDF主要包含图片或图表内容")
 	}
 
 	// 3. 执行翻译
@@ -133,26 +137,38 @@ func (pmt *PDFMathTranslator) TranslatePDF(inputPath, outputDir string, config P
 		// 单语模式：只生成单语PDF
 		monoFile = filepath.Join(outputDir, filename+"-mono.pdf")
 		if err := pmt.Generator.GenerateMonolingualPDF(&translatedContent, monoFile, pdfConfig); err != nil {
-			log.Printf("警告：生成单语PDF失败: %v", err)
+			return nil, fmt.Errorf("生成单语PDF失败: %w", err)
 		}
 		log.Printf("单语模式：生成单语PDF: %s", monoFile)
 	} else {
 		// 双语模式（默认）：生成双语PDF，可选生成单语PDF
 		dualFile = filepath.Join(outputDir, filename+"-dual.pdf")
 		if err := pmt.Generator.GenerateBilingualPDF(content, &translatedContent, dualFile, pdfConfig); err != nil {
-			log.Printf("警告：生成双语PDF失败: %v", err)
+			return nil, fmt.Errorf("生成双语PDF失败: %w", err)
 		}
 
 		// 也生成单语版本作为备选
 		monoFile = filepath.Join(outputDir, filename+"-mono.pdf")
 		if err := pmt.Generator.GenerateMonolingualPDF(&translatedContent, monoFile, pdfConfig); err != nil {
 			log.Printf("警告：生成单语PDF失败: %v", err)
+			// 双语模式下，单语PDF失败不应该导致整个任务失败
 		}
 		log.Printf("双语模式：生成双语PDF: %s 和单语PDF: %s", dualFile, monoFile)
 	}
 
 	if progressCallback != nil {
 		progressCallback(1.0)
+	}
+
+	// 验证生成的文件是否存在
+	if config.GenerateMode == "monolingual" {
+		if _, err := os.Stat(monoFile); os.IsNotExist(err) {
+			return nil, fmt.Errorf("单语PDF文件未生成: %s", monoFile)
+		}
+	} else {
+		if _, err := os.Stat(dualFile); os.IsNotExist(err) {
+			return nil, fmt.Errorf("双语PDF文件未生成: %s", dualFile)
+		}
 	}
 
 	result := &PDFMathResult{
@@ -167,19 +183,22 @@ func (pmt *PDFMathTranslator) TranslatePDF(inputPath, outputDir string, config P
 
 // setupFont 设置字体路径
 func (pmt *PDFMathTranslator) setupFont(langOut string) {
-	// 根据目标语言选择合适的字体
-	fontMap := map[string]string{
-		"zh": "fonts/SourceHanSerif-Regular.ttf",
-		"ja": "fonts/SourceHanSerif-Regular.ttf",
-		"ko": "fonts/SourceHanSerif-Regular.ttf",
-		"ar": "fonts/NotoSansArabic-Regular.ttf",
-		"hi": "fonts/NotoSansDevanagari-Regular.ttf",
-		"th": "fonts/NotoSansThai-Regular.ttf",
-	}
+	// 使用系统字体检测器
+	detector := NewSystemFontDetector()
 
-	if fontPath, exists := fontMap[langOut]; exists {
-		pmt.FontPath = fontPath
-		pmt.Generator.FontPath = fontPath
+	// 根据目标语言自动检测系统字体
+	systemFontPath := detector.GetSystemFontPath(langOut)
+	if systemFontPath != "" {
+		pmt.FontPath = systemFontPath
+		pmt.Generator.FontPath = systemFontPath
+		log.Printf("为语言 %s 选择系统字体: %s", langOut, systemFontPath)
+	} else {
+		log.Printf("警告：未找到语言 %s 的合适字体", langOut)
+		log.Printf("提示：请确保系统已安装对应语言的字体")
+
+		// 清空字体路径，使用默认处理
+		pmt.FontPath = ""
+		pmt.Generator.FontPath = ""
 	}
 }
 

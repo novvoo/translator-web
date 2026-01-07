@@ -166,13 +166,21 @@ func (pti *PDFTranslatorIntegration) generateOutputFiles(originalContent, transl
 	// 生成单语PDF（翻译版）
 	monoFile := filepath.Join(outputDir, filename+"-mono.pdf")
 	if err := generator.GenerateMonolingualPDF(translatedContent, monoFile, pdfConfig); err != nil {
-		log.Printf("警告：生成单语PDF失败: %v", err)
+		return nil, fmt.Errorf("生成单语PDF失败: %w", err)
 	}
 
 	// 生成双语PDF
 	dualFile := filepath.Join(outputDir, filename+"-dual.pdf")
 	if err := generator.GenerateBilingualPDF(originalContent, translatedContent, dualFile, pdfConfig); err != nil {
-		log.Printf("警告：生成双语PDF失败: %v", err)
+		return nil, fmt.Errorf("生成双语PDF失败: %w", err)
+	}
+
+	// 验证生成的文件是否存在
+	if _, err := os.Stat(monoFile); os.IsNotExist(err) {
+		return nil, fmt.Errorf("单语PDF文件未生成: %s", monoFile)
+	}
+	if _, err := os.Stat(dualFile); os.IsNotExist(err) {
+		return nil, fmt.Errorf("双语PDF文件未生成: %s", dualFile)
 	}
 
 	result := &PDFMathResult{

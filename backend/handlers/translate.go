@@ -235,9 +235,16 @@ func processTranslation(sessionID, taskID, sourcePath string, req models.Transla
 
 	defer func() {
 		if r := recover(); r != nil {
+			errorMsg := fmt.Sprintf("%v", r)
+
+			// 检查是否是PDF格式问题，提供更友好的错误信息
+			if strings.Contains(errorMsg, "stream not present") || strings.Contains(errorMsg, "malformed PDF") {
+				errorMsg = "PDF文件格式不兼容。此PDF可能使用了特殊编码、加密或压缩方式。建议：\n1. 使用其他PDF工具（如Adobe Acrobat、PDFtk等）重新保存该文件\n2. 确保PDF未加密且可以正常复制文本\n3. 尝试将PDF转换为标准格式后再上传"
+			}
+
 			taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
 				t.Status = "failed"
-				t.Error = fmt.Sprintf("翻译过程出错: %v", r)
+				t.Error = errorMsg
 			})
 			log.Printf("[会话 %s][任务 %s] 翻译失败（panic）: %v", sessionID[:8], taskID, r)
 		}
@@ -298,8 +305,8 @@ func processTranslation(sessionID, taskID, sourcePath string, req models.Transla
 	ext := strings.ToLower(filepath.Ext(sourcePath))
 	var outputPath string
 	if ext == ".pdf" {
-		// PDF 默认输出为 HTML 文件（更好的格式）
-		outputPath = filepath.Join(userOutputDir, taskID+".html")
+		// PDF 默认输出为 PDF 文件
+		outputPath = filepath.Join(userOutputDir, taskID+".pdf")
 	} else {
 		// EPUB 保持原格式
 		outputPath = filepath.Join(userOutputDir, taskID+ext)
@@ -316,9 +323,16 @@ func processTranslation(sessionID, taskID, sourcePath string, req models.Transla
 	log.Printf("[会话 %s][任务 %s] 开始翻译文档: %s，生成模式: %s", sessionID[:8], taskID, sourcePath, req.GenerateMode)
 	actualOutputPath, err := docTranslator.TranslateDocument(sourcePath, outputPath, req.TargetLanguage, req.UserPrompt, req.ForceRetranslate, req.GenerateMode, progressCallback)
 	if err != nil {
+		errorMsg := err.Error()
+
+		// 检查是否是PDF格式问题，提供更友好的错误信息
+		if strings.Contains(errorMsg, "stream not present") || strings.Contains(errorMsg, "PDF文件格式不受支持") || strings.Contains(errorMsg, "PDF文件格式不兼容") {
+			errorMsg = "PDF文件格式不兼容。此PDF可能使用了特殊编码、加密或压缩方式。建议：\n1. 使用其他PDF工具（如Adobe Acrobat、PDFtk等）重新保存该文件\n2. 确保PDF未加密且可以正常复制文本\n3. 尝试将PDF转换为标准格式后再上传"
+		}
+
 		taskManager.UpdateTask(sessionID, taskID, func(t *models.TranslateTask) {
 			t.Status = "failed"
-			t.Error = "翻译失败: " + err.Error()
+			t.Error = errorMsg
 		})
 		log.Printf("[会话 %s][任务 %s] 翻译失败: %v", sessionID[:8], taskID, err)
 		return
@@ -386,10 +400,10 @@ func DownloadHandler(c *gin.Context) {
 	sourceExt := strings.ToLower(filepath.Ext(task.SourceFile))
 
 	var filename string
-	if sourceExt == ".pdf" && outputExt == ".html" {
-		// PDF 翻译输出为 HTML 格式
+	if sourceExt == ".pdf" && outputExt == ".pdf" {
+		// PDF 翻译输出为 PDF 格式
 		baseName := strings.TrimSuffix(task.SourceFile, filepath.Ext(task.SourceFile))
-		filename = "translated_" + baseName + ".html"
+		filename = "translated_" + baseName + ".pdf"
 	} else {
 		// 其他情况保持原扩展名
 		filename = "translated_" + task.SourceFile

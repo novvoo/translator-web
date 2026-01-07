@@ -32,6 +32,10 @@ func (dt *DocumentTranslator) TranslateDocument(inputPath, outputPath, targetLan
 
 	// 验证文档
 	if err := ValidateDocument(inputPath); err != nil {
+		// 为PDF提供更详细的错误信息
+		if strings.Contains(err.Error(), "stream not present") || strings.Contains(err.Error(), "PDF文件格式不受支持") {
+			return "", fmt.Errorf("PDF文件格式不兼容。此PDF可能使用了特殊编码、加密或压缩方式。建议：\n1. 使用其他PDF工具（如Adobe Acrobat、PDFtk等）重新保存该文件\n2. 确保PDF未加密且可以正常复制文本\n3. 尝试将PDF转换为标准格式后再上传")
+		}
 		return "", fmt.Errorf("文档验证失败: %w", err)
 	}
 
@@ -51,50 +55,6 @@ func (dt *DocumentTranslator) TranslateDocument(inputPath, outputPath, targetLan
 		return dt.translateEPUB(inputPath, outputPath, targetLanguage, userPrompt, generateMode, progressCallback)
 	default:
 		return "", fmt.Errorf("不支持的文档类型: %s", docType)
-	}
-}
-
-// savePDFTranslation 保存 PDF 翻译结果
-func (dt *DocumentTranslator) savePDFTranslation(pdfDoc *PDFDocument, outputPath string, originalBlocks []string, translations map[string]string, generateMode string) (string, error) {
-	// 构建翻译后的文本块
-	var translatedBlocks []string
-	for _, block := range originalBlocks {
-		if trans, ok := translations[block]; ok {
-			translatedBlocks = append(translatedBlocks, trans)
-		} else {
-			translatedBlocks = append(translatedBlocks, block)
-		}
-	}
-
-	// 根据输出路径扩展名决定输出格式
-	ext := strings.ToLower(filepath.Ext(outputPath))
-
-	switch ext {
-	case ".pdf":
-		// 生成 PDF 文件
-		if generateMode == "monolingual" {
-			return outputPath, pdfDoc.SaveMonolingualPDF(outputPath, translatedBlocks)
-		}
-		return outputPath, pdfDoc.SaveBilingualPDF(outputPath, originalBlocks, translatedBlocks)
-	case ".html":
-		// 生成 HTML 文件
-		if generateMode == "monolingual" {
-			return outputPath, pdfDoc.SaveMonolingualHTML(outputPath, translatedBlocks)
-		}
-		return outputPath, pdfDoc.SaveBilingualHTML(outputPath, originalBlocks, translatedBlocks)
-	case ".txt", ".md":
-		// 生成文本文件
-		if generateMode == "monolingual" {
-			return outputPath, pdfDoc.SaveMonolingualText(outputPath, translatedBlocks)
-		}
-		return outputPath, pdfDoc.SaveBilingualText(outputPath, originalBlocks, translatedBlocks)
-	default:
-		// 默认保存为 PDF 文件
-		pdfPath := strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + ".pdf"
-		if generateMode == "monolingual" {
-			return pdfPath, pdfDoc.SaveMonolingualPDF(pdfPath, translatedBlocks)
-		}
-		return pdfPath, pdfDoc.SaveBilingualPDF(pdfPath, originalBlocks, translatedBlocks)
 	}
 }
 
@@ -124,8 +84,7 @@ func (dt *DocumentTranslator) translatePDF(inputPath, outputPath, targetLanguage
 	// 执行翻译
 	result, err := dt.PDFMathTranslator.TranslatePDF(inputPath, outputDir, config, progressCallback)
 	if err != nil {
-		log.Printf("PDF翻译失败，使用简化模式: %v", err)
-		return dt.translatePDFSimple(inputPath, outputPath, targetLanguage, userPrompt, generateMode, progressCallback)
+		return "", fmt.Errorf("PDF翻译失败: %w", err)
 	}
 
 	// 返回合适的PDF文件路径
@@ -140,32 +99,6 @@ func (dt *DocumentTranslator) translatePDF(inputPath, outputPath, targetLanguage
 		}
 		return result.MonoFile, nil
 	}
-}
-
-// translatePDFSimple 简化PDF翻译（当PDFMathTranslator失败时使用）
-func (dt *DocumentTranslator) translatePDFSimple(inputPath, outputPath, targetLanguage, userPrompt, generateMode string, progressCallback func(float64)) (string, error) {
-	log.Printf("使用简化模式翻译PDF")
-
-	// 打开PDF文档
-	doc, _, err := OpenDocument(inputPath)
-	if err != nil {
-		return "", fmt.Errorf("打开PDF文档失败: %w", err)
-	}
-
-	// 提取文本块
-	textBlocks := doc.GetTextBlocks()
-	if len(textBlocks) == 0 {
-		return "", fmt.Errorf("PDF中没有可翻译的文本内容")
-	}
-
-	log.Printf("提取到 %d 个文本块", len(textBlocks))
-
-	// 翻译文本块
-	translations := dt.translateTextBlocks(textBlocks, targetLanguage, userPrompt, progressCallback)
-
-	// 保存PDF翻译结果
-	pdfDoc := doc.(*PDFDocument)
-	return dt.savePDFTranslation(pdfDoc, outputPath, textBlocks, translations, generateMode)
 }
 
 // translateEPUB 翻译EPUB文档
