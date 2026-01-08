@@ -176,17 +176,24 @@ func ParseHTML(content []byte) (*HTMLContent, error) {
 
 // ExtractTextBlocks 提取文本块
 func ExtractTextBlocks(html string) []string {
-	// 首先预处理HTML，将<br/>标签替换为特殊分隔符
-	html = strings.ReplaceAll(html, "<br/>", "|||BR|||")
-	html = strings.ReplaceAll(html, "<br>", "|||BR|||")
-	html = strings.ReplaceAll(html, "<BR/>", "|||BR|||")
-	html = strings.ReplaceAll(html, "<BR>", "|||BR|||")
+	// 预处理HTML，清理字符实体和格式化
+	html = strings.ReplaceAll(html, "&#13;", "")
+	html = strings.ReplaceAll(html, "\r", "")
+	html = strings.ReplaceAll(html, "\n", " ")
+
+	// 将<br/>标签替换为换行符，便于后续分割
+	html = strings.ReplaceAll(html, "<br/>", "\n")
+	html = strings.ReplaceAll(html, "<br>", "\n")
+	html = strings.ReplaceAll(html, "<BR/>", "\n")
+	html = strings.ReplaceAll(html, "<BR>", "\n")
 
 	var blocks []string
 	decoder := xml.NewDecoder(strings.NewReader(html))
 	var currentText strings.Builder
 	var inSpan bool
 	var inFont bool
+	var inBlockElement bool
+	var inBold bool
 
 	for {
 		token, err := decoder.Token()
@@ -194,8 +201,8 @@ func ExtractTextBlocks(html string) []string {
 			break
 		}
 		if err != nil {
-			// 如果 XML 解析失败，使用简单的文本提取
-			return simpleTextExtract(html)
+			// 如果 XML 解析失败，直接返回空切片，不再使用simpleTextExtract
+			return []string{}
 		}
 
 		switch t := token.(type) {
@@ -210,38 +217,47 @@ func ExtractTextBlocks(html string) []string {
 				// 如果当前有文本，先保存为一个块
 				if currentText.Len() > 0 {
 					text := strings.TrimSpace(currentText.String())
-					if text != "" {
-						// 处理BR分隔符
-						parts := strings.Split(text, "|||BR|||")
-						for _, part := range parts {
-							part = strings.TrimSpace(part)
-							if part != "" {
-								blocks = append(blocks, part)
-							}
-						}
+					if text != "" && shouldExtractText(text) {
+						blocks = append(blocks, text)
 					}
 					currentText.Reset()
 				}
 			}
+			// 检测 b 标签（粗体，通常是单词）
+			if t.Name.Local == "b" {
+				inBold = true
+				// 如果当前有文本，先保存为一个块
+				if currentText.Len() > 0 {
+					text := strings.TrimSpace(currentText.String())
+					if text != "" && shouldExtractText(text) {
+						blocks = append(blocks, text)
+					}
+					currentText.Reset()
+				}
+			}
+			// 检测块级元素
+			if isBlockElement(t.Name.Local) {
+				inBlockElement = true
+			}
 
 		case xml.CharData:
 			text := string(t)
-			currentText.WriteString(text)
+			// 清理多余的空白字符
+			text = strings.TrimSpace(text)
+			if text != "" {
+				if currentText.Len() > 0 {
+					currentText.WriteString(" ")
+				}
+				currentText.WriteString(text)
+			}
 
 		case xml.EndElement:
 			// span 标签结束时，如果有内容则作为一个独立的文本块
 			if t.Name.Local == "span" && inSpan {
 				if currentText.Len() > 0 {
 					text := strings.TrimSpace(currentText.String())
-					if text != "" {
-						// 处理BR分隔符
-						parts := strings.Split(text, "|||BR|||")
-						for _, part := range parts {
-							part = strings.TrimSpace(part)
-							if part != "" {
-								blocks = append(blocks, part)
-							}
-						}
+					if text != "" && shouldExtractText(text) {
+						blocks = append(blocks, text)
 					}
 					currentText.Reset()
 				}
@@ -250,54 +266,64 @@ func ExtractTextBlocks(html string) []string {
 				// font 标签结束时，保存为独立的文本块（通常是例句）
 				if currentText.Len() > 0 {
 					text := strings.TrimSpace(currentText.String())
-					if text != "" {
-						// 处理BR分隔符
-						parts := strings.Split(text, "|||BR|||")
-						for _, part := range parts {
-							part = strings.TrimSpace(part)
-							if part != "" {
-								blocks = append(blocks, part)
-							}
-						}
+					if text != "" && shouldExtractText(text) {
+						blocks = append(blocks, text)
 					}
 					currentText.Reset()
 				}
 				inFont = false
-			} else if isBlockElement(t.Name.Local) {
-				// 块级元素结束时，如果还有未处理的文本，也添加进去
+			} else if t.Name.Local == "b" && inBold {
+				// b 标签结束时，保存为独立的文本块（通常是单词）
 				if currentText.Len() > 0 {
 					text := strings.TrimSpace(currentText.String())
-					if text != "" {
-						// 处理BR分隔符
-						parts := strings.Split(text, "|||BR|||")
-						for _, part := range parts {
-							part = strings.TrimSpace(part)
-							if part != "" {
-								blocks = append(blocks, part)
-							}
-						}
+					if text != "" && shouldExtractText(text) {
+						blocks = append(blocks, text)
 					}
 					currentText.Reset()
 				}
+				inBold = false
+			} else if isBlockElement(t.Name.Local) && inBlockElement {
+				// 块级元素结束时，如果还有未处理的文本，也添加进去
+				if currentText.Len() > 0 {
+					text := strings.TrimSpace(currentText.String())
+					if text != "" && shouldExtractText(text) {
+						blocks = append(blocks, text)
+					}
+					currentText.Reset()
+				}
+				inBlockElement = false
 			}
 		}
 	}
 
+	// 处理剩余的文本
 	if currentText.Len() > 0 {
 		text := strings.TrimSpace(currentText.String())
-		if text != "" {
-			// 处理BR分隔符
-			parts := strings.Split(text, "|||BR|||")
-			for _, part := range parts {
-				part = strings.TrimSpace(part)
-				if part != "" {
-					blocks = append(blocks, part)
-				}
-			}
+		if text != "" && shouldExtractText(text) {
+			blocks = append(blocks, text)
 		}
 	}
 
 	return blocks
+}
+
+// shouldExtractText 判断文本是否应该被提取（过滤掉纯标点符号等）
+func shouldExtractText(text string) bool {
+	// 过滤掉空文本
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+
+	// 过滤掉只包含标点符号和空格的文本
+	hasLetter := false
+	for _, r := range text {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r > 127 {
+			hasLetter = true
+			break
+		}
+	}
+
+	return hasLetter
 }
 
 // isBlockElement 判断是否为块级元素
@@ -307,34 +333,6 @@ func isBlockElement(tag string) bool {
 		"h4": true, "h5": true, "h6": true, "li": true, "blockquote": true,
 	}
 	return blockTags[tag]
-}
-
-// simpleTextExtract 简单的文本提取（备用方案）
-func simpleTextExtract(html string) []string {
-	// 移除标签
-	var result strings.Builder
-	inTag := false
-	for _, r := range html {
-		if r == '<' {
-			inTag = true
-		} else if r == '>' {
-			inTag = false
-		} else if !inTag {
-			result.WriteRune(r)
-		}
-	}
-
-	// 按段落分割
-	text := result.String()
-	lines := strings.Split(text, "\n")
-	var blocks []string
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			blocks = append(blocks, line)
-		}
-	}
-	return blocks
 }
 
 // InsertTranslation 插入翻译（双语显示）
