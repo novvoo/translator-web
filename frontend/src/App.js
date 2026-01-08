@@ -667,7 +667,7 @@ function App() {
                       startIcon={<Download />}
                       onClick={() => handleDownload(task.id, task.sourceFile)}
                     >
-                      下载翻译文件 {task.sourceFile.toLowerCase().endsWith('.pdf') ? '(HTML格式)' : ''}
+                      下载翻译文件 {task.sourceFile.toLowerCase().endsWith('.pdf') }
                     </Button>
                   )}
 
