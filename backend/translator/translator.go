@@ -174,7 +174,7 @@ func (dt *DocumentTranslator) translateTextBlocks(textBlocks []string, targetLan
 // mapLanguageCode 映射语言代码到PDFMathTranslate支持的格式
 func (dt *DocumentTranslator) mapLanguageCode(language string) string {
 	mapping := map[string]string{
-		"Chinese":    "zh",
+		"Uni":        "zh",
 		"English":    "en",
 		"Japanese":   "ja",
 		"Korean":     "ko",
@@ -189,5 +189,5 @@ func (dt *DocumentTranslator) mapLanguageCode(language string) string {
 	if code, ok := mapping[language]; ok {
 		return code
 	}
-	return "zh" // 默认中文
+	return "zh" // 默认通用
 }

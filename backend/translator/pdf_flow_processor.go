@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"translator-web/pdf"
 
 	"github.com/jung-kurt/gofpdf"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
@@ -18,14 +19,15 @@ import (
 
 // PDFFlowProcessor PDF流处理器 - 基于临时目录的动态PDF重建
 type PDFFlowProcessor struct {
-	workDir         string
-	inputPath       string
-	outputPath      string
-	flowData        *PDFFlowData
-	fontManager     *FontManager
-	logger          *PDFLogger
-	sessionID       string
-	chineseFontName string // 添加中文字体名称字段
+	workDir     string
+	inputPath   string
+	outputPath  string
+	flowData    *PDFFlowData
+	fontManager *FontManager
+	uniFontMgr  *pdf.UniFontManager // 添加通用字体管理器
+	logger      *PDFLogger
+	sessionID   string
+	UniFontName string // 添加通用字体名称字段
 }
 
 // PDFFlowData PDF流数据结构
@@ -2637,17 +2639,17 @@ func (p *PDFFlowProcessor) isFormula(text, fontName string) bool {
 // detectLanguage 检测语言
 func (p *PDFFlowProcessor) detectLanguage(text string) string {
 	// 简单的语言检测
-	chineseCount := 0
+	UniCount := 0
 	totalCount := 0
 
 	for _, r := range text {
 		totalCount++
 		if r >= 0x4e00 && r <= 0x9fff {
-			chineseCount++
+			UniCount++
 		}
 	}
 
-	if totalCount > 0 && float64(chineseCount)/float64(totalCount) > 0.3 {
+	if totalCount > 0 && float64(UniCount)/float64(totalCount) > 0.3 {
 		return "zh"
 	}
 
@@ -2914,7 +2916,7 @@ func (p *PDFFlowProcessor) extractWords(text string) []string {
 	// 标准化文本
 	normalized := p.normalizeText(text)
 
-	// 分割单词（支持英文和中文）
+	// 分割单词（支持英文和通用）
 	var words []string
 	var currentWord strings.Builder
 
@@ -2998,8 +3000,8 @@ func (p *PDFFlowProcessor) calculateTextBounds(text string, font FontFlow) (Boun
 
 	// 基础字符宽度（根据字体大小调整）
 	var charWidth float64
-	if p.containsChinese(text) {
-		// 中文字符通常更宽
+	if p.containsUni(text) {
+		// 通用字符通常更宽
 		charWidth = font.Size * 0.8
 	} else {
 		// 英文字符
@@ -3118,7 +3120,7 @@ func (p *PDFFlowProcessor) recalculateLayout() error {
 
 // setupFonts 设置字体支持
 func (p *PDFFlowProcessor) setupFonts(pdf *gofpdf.Fpdf) error {
-	// 添加中文字体支持
+	// 添加通用字体支持
 	fontDetector := NewSystemFontDetector()
 	fontPath := fontDetector.GetSystemFontPath("zh")
 
@@ -3127,11 +3129,11 @@ func (p *PDFFlowProcessor) setupFonts(pdf *gofpdf.Fpdf) error {
 		pdf.AddUTF8Font(fontName, "", fontPath)
 
 		if err := pdf.Error(); err != nil {
-			log.Printf("警告：添加中文字体失败: %v", err)
+			log.Printf("警告：添加通用字体失败: %v", err)
 		} else {
-			log.Printf("成功添加中文字体: %s", fontName)
+			log.Printf("成功添加通用字体: %s", fontName)
 			// 保存字体名称供后续使用
-			p.chineseFontName = fontName
+			p.UniFontName = fontName
 		}
 	}
 
@@ -3204,12 +3206,12 @@ func (p *PDFFlowProcessor) generatePage(pdf *gofpdf.Fpdf, page PDFPageFlow) erro
 func (p *PDFFlowProcessor) renderTextElement(pdf *gofpdf.Fpdf, element TextElementFlow, index int) error {
 	// 设置字体
 	fontName := "Arial"
-	if p.containsChinese(element.Content) {
-		// 使用已添加的中文字体
-		if p.chineseFontName != "" {
-			fontName = p.chineseFontName
+	if p.containsUni(element.Content) {
+		// 使用已添加的通用字体
+		if p.UniFontName != "" {
+			fontName = p.UniFontName
 		} else {
-			// 如果没有中文字体，尝试使用Arial作为备用
+			// 如果没有通用字体，尝试使用Arial作为备用
 			fontName = "Arial"
 		}
 	}
@@ -3413,8 +3415,8 @@ func (p *PDFFlowProcessor) renderGraphicsElement(pdf *gofpdf.Fpdf, element Graph
 	return nil
 }
 
-// containsChinese 检测是否包含中文
-func (p *PDFFlowProcessor) containsChinese(text string) bool {
+// containsUni 检测是否包含通用通用
+func (p *PDFFlowProcessor) containsUni(text string) bool {
 	for _, r := range text {
 		if r >= 0x4e00 && r <= 0x9fff {
 			return true

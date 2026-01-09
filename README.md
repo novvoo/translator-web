@@ -327,7 +327,7 @@ Temperature: 0.3
 | **OpenAI** | 云端AI | 付费 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 翻译质量最高，支持多种模型 |
 | **Claude** | 云端AI | 付费 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | 理解能力强，适合文学翻译 |
 | **Gemini** | 云端AI | 付费 | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Google 出品，多语言支持好 |
-| **DeepSeek** | 云端AI | 付费 | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 性价比高，中文支持好 |
+| **DeepSeek** | 云端AI | 付费 | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | 性价比高，通用支持好 |
 | **Ollama** | 本地AI | 免费 | ⭐⭐⭐ | ⭐⭐⭐ | 完全本地，隐私安全 |
 | **NLTranslator** | 系统翻译 | 免费 | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | macOS 原生，快速稳定 |
 | **LibreTranslate** | 开源服务 | 免费 | ⭐⭐ | ⭐⭐⭐ | 开源免费，基础翻译 |
@@ -409,7 +409,7 @@ translator-web/
 ```bash
 curl -X POST http://localhost:8080/api/translate \
   -F "file=@document.pdf" \
-  -F "targetLanguage=Chinese" \
+  -F "targetLanguage=Uni" \
   -F "forceRetranslate=false" \
   -F 'llmConfig={
     "provider": "openai",
@@ -437,7 +437,7 @@ curl -X POST http://localhost:8080/api/translate \
 {
   "id": "uuid",
   "sourceFile": "document.pdf",
-  "targetLanguage": "Chinese",
+  "targetLanguage": "Uni",
   "status": "processing",
   "progress": 0.5,
   "createdAt": "2024-01-01T00:00:00Z"

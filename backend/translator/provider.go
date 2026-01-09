@@ -277,28 +277,28 @@ func (p *NLTranslateProvider) Translate(text, targetLanguage, userPrompt string)
 // mapToNLLanguageCode 将常见语言名称映射到 NaturalLanguage 语言代码
 func mapToNLLanguageCode(language string) string {
 	languageMap := map[string]string{
-		"Chinese":             "zh-Hans",
-		"Simplified Chinese":  "zh-Hans",
-		"简体中文":                "zh-Hans",
-		"中文":                  "zh-Hans",
-		"Traditional Chinese": "zh-Hant",
-		"繁体中文":                "zh-Hant",
-		"繁體中文":                "zh-Hant",
-		"English":             "en",
-		"英语":                  "en",
-		"英文":                  "en",
-		"Japanese":            "ja",
-		"日语":                  "ja",
-		"日文":                  "ja",
-		"Korean":              "ko",
-		"韩语":                  "ko",
-		"韓語":                  "ko",
-		"Spanish":             "es",
-		"西班牙语":                "es",
-		"French":              "fr",
-		"法语":                  "fr",
-		"German":              "de",
-		"德语":                  "de",
+		"Uni":             "zh-Hans",
+		"Simplified Uni":  "zh-Hans",
+		"简体通用":            "zh-Hans",
+		"通用":              "zh-Hans",
+		"Traditional Uni": "zh-Hant",
+		"繁体通用":            "zh-Hant",
+		"繁體通用":            "zh-Hant",
+		"English":         "en",
+		"英语":              "en",
+		"英文":              "en",
+		"Japanese":        "ja",
+		"日语":              "ja",
+		"日文":              "ja",
+		"Korean":          "ko",
+		"韩语":              "ko",
+		"韓語":              "ko",
+		"Spanish":         "es",
+		"西班牙语":            "es",
+		"French":          "fr",
+		"法语":              "fr",
+		"German":          "de",
+		"德语":              "de",
 	}
 
 	if code, ok := languageMap[language]; ok {
@@ -636,10 +636,10 @@ func (p *CustomProvider) Translate(text, targetLanguage, userPrompt string) (str
 // detectSourceLanguage 简单的源语言检测
 func detectSourceLanguage(text string) string {
 	// 简单的语言检测逻辑
-	// 检测中文字符
+	// 检测通用字符
 	for _, r := range text {
 		if r >= 0x4e00 && r <= 0x9fff {
-			return "zh-Hans" // 中文
+			return "zh-Hans" // 通用
 		}
 	}
 
@@ -743,38 +743,38 @@ func (p *LibreTranslateProvider) Translate(text, targetLanguage, userPrompt stri
 // mapToLibreTranslateLanguageCode 将常见语言名称映射到 LibreTranslate 语言代码
 func mapToLibreTranslateLanguageCode(language string) string {
 	languageMap := map[string]string{
-		"Chinese":             "zh",
-		"Simplified Chinese":  "zh",
-		"简体中文":                "zh",
-		"中文":                  "zh",
-		"Traditional Chinese": "zh",
-		"繁体中文":                "zh",
-		"繁體中文":                "zh",
-		"English":             "en",
-		"英语":                  "en",
-		"英文":                  "en",
-		"Japanese":            "ja",
-		"日语":                  "ja",
-		"日文":                  "ja",
-		"Korean":              "ko",
-		"韩语":                  "ko",
-		"韓語":                  "ko",
-		"Spanish":             "es",
-		"西班牙语":                "es",
-		"French":              "fr",
-		"法语":                  "fr",
-		"German":              "de",
-		"德语":                  "de",
-		"Italian":             "it",
-		"意大利语":                "it",
-		"Portuguese":          "pt",
-		"葡萄牙语":                "pt",
-		"Russian":             "ru",
-		"俄语":                  "ru",
-		"Arabic":              "ar",
-		"阿拉伯语":                "ar",
-		"Hindi":               "hi",
-		"印地语":                 "hi",
+		"Uni":             "zh",
+		"Simplified Uni":  "zh",
+		"简体通用":            "zh",
+		"通用":              "zh",
+		"Traditional Uni": "zh",
+		"繁体通用":            "zh",
+		"繁體通用":            "zh",
+		"English":         "en",
+		"英语":              "en",
+		"英文":              "en",
+		"Japanese":        "ja",
+		"日语":              "ja",
+		"日文":              "ja",
+		"Korean":          "ko",
+		"韩语":              "ko",
+		"韓語":              "ko",
+		"Spanish":         "es",
+		"西班牙语":            "es",
+		"French":          "fr",
+		"法语":              "fr",
+		"German":          "de",
+		"德语":              "de",
+		"Italian":         "it",
+		"意大利语":            "it",
+		"Portuguese":      "pt",
+		"葡萄牙语":            "pt",
+		"Russian":         "ru",
+		"俄语":              "ru",
+		"Arabic":          "ar",
+		"阿拉伯语":            "ar",
+		"Hindi":           "hi",
+		"印地语":             "hi",
 	}
 
 	if code, ok := languageMap[language]; ok {

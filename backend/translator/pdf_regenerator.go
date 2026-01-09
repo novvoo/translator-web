@@ -173,7 +173,7 @@ func (r *PDFRegenerator) exportProcessingReport(processor *PDFFlowProcessor, tra
 	fmt.Fprintf(file, "4. 基于更新后的流数据重新生成PDF\n")
 	fmt.Fprintf(file, "5. 保留所有图片、图形、样式等非文本元素\n")
 	fmt.Fprintf(file, "6. 动态调整文本位置以适应翻译后的内容\n")
-	fmt.Fprintf(file, "7. 支持中文字体和复杂排版\n")
+	fmt.Fprintf(file, "7. 支持通用字体和复杂排版\n")
 
 	log.Printf("处理报告已导出: %s", reportPath)
 	return nil

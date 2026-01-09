@@ -229,7 +229,7 @@ func containsGarbledText(text string) bool {
 	for _, r := range text {
 		totalCount++
 
-		// 如果是正常的ASCII字符或中文字符，跳过
+		// 如果是正常的ASCII字符或通用字符，跳过
 		if (r >= 32 && r <= 126) || (r >= 0x4e00 && r <= 0x9fff) {
 			continue
 		}
@@ -574,18 +574,18 @@ func (d *PDFDocument) validatePDFModification(outputPath string, translations ma
 	// 6. 如果文件大小没变，尝试其他验证方法
 	log.Printf("尝试其他验证方法...")
 
-	// 检查是否包含中文字符或翻译文本（尽管可能有编码问题）
-	foundChineseOrTranslation := false
+	// 检查是否包含通用字符或翻译文本（尽管可能有编码问题）
+	foundUniOrTranslation := false
 	for _, pageText := range outputDoc.PageTexts {
-		// 检查是否包含中文字符
+		// 检查是否包含通用字符
 		for _, r := range pageText {
 			if r >= 0x4e00 && r <= 0x9fff {
-				foundChineseOrTranslation = true
+				foundUniOrTranslation = true
 				break
 			}
 		}
 
-		if foundChineseOrTranslation {
+		if foundUniOrTranslation {
 			break
 		}
 
@@ -594,32 +594,24 @@ func (d *PDFDocument) validatePDFModification(outputPath string, translations ma
 			if len(translation) > 5 {
 				// 检查翻译文本的一部分
 				if strings.Contains(pageText, translation[:min(len(translation), 20)]) {
-					foundChineseOrTranslation = true
+					foundUniOrTranslation = true
 					break
 				}
 			}
 		}
 
-		if foundChineseOrTranslation {
+		if foundUniOrTranslation {
 			break
 		}
 	}
 
-	if foundChineseOrTranslation {
-		log.Printf("PDF修改验证通过：在PDF中发现中文或翻译文本")
+	if foundUniOrTranslation {
+		log.Printf("PDF修改验证通过：在PDF中发现通用或翻译文本")
 		return nil
 	}
 
 	log.Printf("警告：无法确认PDF是否被正确修改，但文件已生成")
 	return nil // 不返回错误，让用户自己检查
-}
-
-// min 返回两个整数中的较小值
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // SaveMonolingualPDFWithRegeneration 使用重新生成方法保存单语PDF

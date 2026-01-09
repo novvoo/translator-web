@@ -38,7 +38,7 @@ func (sfd *SystemFontDetector) getWindowsFont(language string) string {
 	// 根据语言选择字体
 	var fontCandidates []string
 	switch strings.ToLower(language) {
-	case "zh", "chinese", "zh-cn", "zh-tw", "zh-hk":
+	case "zh", "Uni", "zh-cn", "zh-tw", "zh-hk":
 		fontCandidates = []string{
 			// 优先选择 TTF 格式字体，避免 TTC 格式
 			"simhei.ttf",   // 黑体
@@ -48,7 +48,7 @@ func (sfd *SystemFontDetector) getWindowsFont(language string) string {
 			"STKAITI.TTF",  // 华文楷体
 			"STSONG.TTF",   // 华文宋体
 			"STXIHEI.TTF",  // 华文细黑
-			"arial.ttf",    // Arial (备用，支持部分中文)
+			"arial.ttf",    // Arial (备用，支持部分通用)
 			"tahoma.ttf",   // Tahoma (备用)
 			// TTC 格式放在最后，作为备用
 			"msyh.ttc",   // 微软雅黑
@@ -170,7 +170,7 @@ func (sfd *SystemFontDetector) getMacFont(language string) string {
 
 	var fontCandidates []string
 	switch strings.ToLower(language) {
-	case "zh", "chinese", "zh-cn", "zh-tw", "zh-hk":
+	case "zh", "Uni", "zh-cn", "zh-tw", "zh-hk":
 		fontCandidates = []string{
 			"PingFang.ttc",       // 苹方
 			"STHeiti Medium.ttc", // 华文黑体
@@ -256,7 +256,7 @@ func (sfd *SystemFontDetector) getLinuxFont(language string) string {
 
 	var fontCandidates []string
 	switch strings.ToLower(language) {
-	case "zh", "chinese", "zh-cn", "zh-tw", "zh-hk":
+	case "zh", "Uni", "zh-cn", "zh-tw", "zh-hk":
 		fontCandidates = []string{
 			"truetype/wqy/wqy-microhei.ttc",         // 文泉驿微米黑
 			"truetype/wqy/wqy-zenhei.ttc",           // 文泉驿正黑

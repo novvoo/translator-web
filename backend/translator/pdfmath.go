@@ -237,9 +237,9 @@ func (pmt *PDFMathTranslator) translateTexts(texts []string, config PDFMathConfi
 // mapLanguageCode 映射语言代码
 func (pmt *PDFMathTranslator) mapLanguageCode(langCode string) string {
 	mapping := map[string]string{
-		"zh":    "Chinese",
-		"zh-cn": "Chinese",
-		"zh-tw": "Chinese",
+		"zh":    "Uni",
+		"zh-cn": "Uni",
+		"zh-tw": "Uni",
 		"en":    "English",
 		"ja":    "Japanese",
 		"ko":    "Korean",
@@ -254,7 +254,7 @@ func (pmt *PDFMathTranslator) mapLanguageCode(langCode string) string {
 	if language, ok := mapping[strings.ToLower(langCode)]; ok {
 		return language
 	}
-	return "Chinese" // 默认中文
+	return "Uni" // 默认通用
 }
 
 // GetSupportedServices 获取支持的翻译服务

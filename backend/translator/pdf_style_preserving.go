@@ -347,7 +347,7 @@ func (r *PDFStylePreservingReplacer) reconstructPDFWithStyles(pages []Reconstruc
 
 // addFontSupport 添加字体支持
 func (r *PDFStylePreservingReplacer) addFontSupport(pdf *gofpdf.Fpdf) error {
-	// 尝试添加中文字体支持
+	// 尝试添加通用字体支持
 	fontPath := r.fontDetector.GetSystemFontPath("zh")
 	if fontPath != "" && r.fileExists(fontPath) {
 		fontName := strings.TrimSuffix(filepath.Base(fontPath), filepath.Ext(fontPath))

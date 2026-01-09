@@ -53,7 +53,7 @@ function App() {
   };
 
   const [file, setFile] = useState(null);
-  const [targetLanguage, setTargetLanguage] = useState(() => loadConfig('targetLanguage', 'Chinese'));
+  const [targetLanguage, setTargetLanguage] = useState(() => loadConfig('targetLanguage', 'Uni'));
   const [sourceLanguage, setSourceLanguage] = useState(() => loadConfig('sourceLanguage', 'English'));
   const [provider, setProvider] = useState(() => loadConfig('provider', 'openai'));
   const [apiKey, setApiKey] = useState(() => loadConfig('apiKey', ''));
@@ -71,7 +71,7 @@ function App() {
   const [customApiConfig, setCustomApiConfig] = useState(() => loadCustomConfig());
 
   const languages = [
-    'Chinese', 'English', 'Japanese', 'Korean', 'French',
+    'Uni', 'English', 'Japanese', 'Korean', 'French',
     'German', 'Spanish', 'Russian', 'Arabic', 'Portuguese'
   ];
 
@@ -225,7 +225,7 @@ function App() {
       localStorage.removeItem('generateMode'); // 清除生成模式配置
 
       // 重置为默认值
-      setTargetLanguage('Chinese');
+      setTargetLanguage('Uni');
       setSourceLanguage('English');
       setProvider('openai');
       setApiKey('');
