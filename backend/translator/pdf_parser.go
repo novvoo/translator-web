@@ -193,9 +193,14 @@ func (p *PDFParser) mergeTextBlocks(blocks []TextBlock) []TextBlock {
 	for i := 1; i < len(blocks); i++ {
 		next := blocks[i]
 
-		// 检查是否可以合并（同一行，相邻位置，相同属性）
+		// 改进合并逻辑：更宽松的合并条件
 		if p.canMerge(current, next) {
-			current.Text += " " + next.Text
+			// 智能添加空格：如果两个文本块之间有明显间隔，添加空格
+			separator := ""
+			if next.X > current.X+current.Width+2 { // 如果有明显间隔
+				separator = " "
+			}
+			current.Text += separator + next.Text
 			current.Width = next.X + next.Width - current.X
 		} else {
 			merged = append(merged, current)
@@ -204,7 +209,9 @@ func (p *PDFParser) mergeTextBlocks(blocks []TextBlock) []TextBlock {
 	}
 
 	merged = append(merged, current)
-	return merged
+
+	// 进行第二轮合并：合并语义相关的文本块
+	return p.mergeSemanticBlocks(merged)
 }
 
 // canMerge 检查两个文本块是否可以合并
@@ -306,4 +313,100 @@ func (p *PDFParser) ApplyTranslations(content *PDFContent, translations map[stri
 			block.Text = translation
 		}
 	}
+}
+
+// mergeSemanticBlocks 合并语义相关的文本块
+func (p *PDFParser) mergeSemanticBlocks(blocks []TextBlock) []TextBlock {
+	if len(blocks) <= 1 {
+		return blocks
+	}
+
+	var merged []TextBlock
+	current := blocks[0]
+
+	for i := 1; i < len(blocks); i++ {
+		next := blocks[i]
+
+		// 检查是否应该合并为一个语义单元
+		if p.shouldMergeSemantically(current, next) {
+			// 合并文本，保持适当的间距
+			separator := " "
+			if strings.HasSuffix(current.Text, "-") ||
+				strings.HasPrefix(next.Text, "-") ||
+				len(current.Text) < 3 || len(next.Text) < 3 {
+				separator = ""
+			}
+			current.Text += separator + next.Text
+			current.Width = next.X + next.Width - current.X
+		} else {
+			merged = append(merged, current)
+			current = next
+		}
+	}
+
+	merged = append(merged, current)
+	return merged
+}
+
+// shouldMergeSemantically 检查是否应该语义合并
+func (p *PDFParser) shouldMergeSemantically(a, b TextBlock) bool {
+	// 必须在同一页
+	if a.PageNum != b.PageNum {
+		return false
+	}
+
+	// 必须是相同类型
+	if a.IsFormula != b.IsFormula {
+		return false
+	}
+
+	// 垂直距离检查：如果在合理的行间距内
+	yDiff := a.Y - b.Y
+	if yDiff < 0 {
+		yDiff = -yDiff
+	}
+
+	// 如果垂直距离太大，不合并
+	if yDiff > a.FontSize*2 {
+		return false
+	}
+
+	// 水平距离检查：如果距离合理
+	xGap := b.X - (a.X + a.Width)
+	if xGap < 0 {
+		xGap = -xGap
+	}
+
+	// 如果水平距离太大，不合并
+	if xGap > a.FontSize*3 {
+		return false
+	}
+
+	// 文本长度检查：如果任一文本块很短，倾向于合并
+	if len(a.Text) < 10 || len(b.Text) < 10 {
+		return true
+	}
+
+	// 连字符检查：如果前一个文本以连字符结尾，合并
+	if strings.HasSuffix(strings.TrimSpace(a.Text), "-") {
+		return true
+	}
+
+	// 标点符号检查：如果后一个文本以标点开始，合并
+	nextText := strings.TrimSpace(b.Text)
+	if len(nextText) > 0 {
+		firstChar := nextText[0]
+		if firstChar == ',' || firstChar == '.' || firstChar == ';' ||
+			firstChar == ':' || firstChar == ')' || firstChar == ']' ||
+			firstChar == '}' {
+			return true
+		}
+	}
+
+	// 大小写检查：如果后一个文本以小写字母开始，可能是同一句话的延续
+	if len(nextText) > 0 && nextText[0] >= 'a' && nextText[0] <= 'z' {
+		return true
+	}
+
+	return false
 }

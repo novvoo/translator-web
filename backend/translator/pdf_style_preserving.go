@@ -351,7 +351,16 @@ func (r *PDFStylePreservingReplacer) addFontSupport(pdf *gofpdf.Fpdf) error {
 	fontPath := r.fontDetector.GetSystemFontPath("zh")
 	if fontPath != "" && r.fileExists(fontPath) {
 		fontName := strings.TrimSuffix(filepath.Base(fontPath), filepath.Ext(fontPath))
+
+		// 使用AddUTF8Font方法，这个方法可以直接处理TTF文件
 		pdf.AddUTF8Font(fontName, "", fontPath)
+
+		// 检查是否成功
+		if err := pdf.Error(); err != nil {
+			log.Printf("添加字体失败: %v", err)
+			return err
+		}
+
 		log.Printf("添加字体支持: %s", fontPath)
 	}
 	return nil

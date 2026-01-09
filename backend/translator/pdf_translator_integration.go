@@ -196,15 +196,3 @@ func (pti *PDFTranslatorIntegration) generateOutputFiles(originalContent, transl
 
 	return result, nil
 }
-
-// setupFontForLanguage 根据语言设置字体 - 保留用于兼容性，但不再使用PDF生成器
-func (pti *PDFTranslatorIntegration) setupFontForLanguage(generator interface{}, langOut string) {
-	// 这个方法保留用于兼容性，但现在使用样式保留替换器，不再需要手动设置字体
-	log.Printf("使用样式保留替换器，自动处理字体: %s", langOut)
-}
-
-// fileExistsInternal 检查文件是否存在（内部使用）
-func fileExistsInternal(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}

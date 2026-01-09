@@ -67,19 +67,7 @@ func parseNCX(content []byte) ([]*TOCItem, error) {
 	return items, nil
 }
 
-func convertNavPoint(np interface{}) *TOCItem {
-	// 类型断言处理
-	type NavPoint struct {
-		ID       string
-		NavLabel struct {
-			Text string
-		}
-		Content struct {
-			Src string
-		}
-		NavPoints []interface{}
-	}
-
+func convertNavPoint(np any) *TOCItem {
 	// 简化实现：直接返回基本结构
 	item := &TOCItem{
 		Title: "Chapter",
@@ -109,7 +97,7 @@ func parseNAV(content []byte) ([]*TOCItem, error) {
 }
 
 // TranslateTOC 翻译目录
-func TranslateTOC(items []*TOCItem, client interface{}, targetLanguage, userPrompt string, cache *Cache) error {
+func TranslateTOC(items []*TOCItem, client any, targetLanguage, userPrompt string, cache *Cache) error {
 	if len(items) == 0 {
 		return nil
 	}
@@ -152,7 +140,7 @@ func fillTitles(items []*TOCItem, translated []string, index *int) {
 	}
 }
 
-func translateTitlesWithCache(titles []string, client interface{}, targetLanguage, userPrompt string, cache *Cache) ([]string, error) {
+func translateTitlesWithCache(titles []string, client any, targetLanguage, userPrompt string, cache *Cache) ([]string, error) {
 	results := make([]string, len(titles))
 
 	for i, title := range titles {
@@ -231,10 +219,12 @@ func WriteTOC(epub *EPUBFile, items []*TOCItem) error {
 func updateNCX(content []byte, items []*TOCItem) ([]byte, error) {
 	// 简化实现：直接返回原内容
 	// 实际应该解析 XML 并更新标题
+	_ = items // 使用参数避免未使用警告
 	return content, nil
 }
 
 func updateNAV(content []byte, items []*TOCItem) ([]byte, error) {
 	// 简化实现：直接返回原内容
+	_ = items // 使用参数避免未使用警告
 	return content, nil
 }

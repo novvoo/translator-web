@@ -65,3 +65,4 @@ docker-compose.yml
 Dockerfile
 .dockerignore
 *.exe
+demo

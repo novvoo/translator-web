@@ -9,9 +9,9 @@ import (
 
 // PDFReplacementIntegration PDF替换集成
 type PDFReplacementIntegration struct {
-	client              *TranslatorClient
-	contentReplacer     *PDFContentReplacer
-	styleReplacer       *PDFStylePreservingReplacer
+	client                *TranslatorClient
+	regenerator           *PDFRegenerator
+	styleReplacer         *PDFStylePreservingReplacer
 	translatorIntegration *PDFTranslatorIntegration
 }
 
@@ -47,18 +47,18 @@ type PDFReplacementRequest struct {
 
 // PDFReplacementResult PDF替换结果
 type PDFReplacementResult struct {
-	MonoFile    string `json:"mono_file"`
-	DualFile    string `json:"dual_file"`
-	Success     bool   `json:"success"`
-	Message     string `json:"message"`
-	Method      string `json:"method"` // "content_replacement" 或 "style_preserving"
+	MonoFile string `json:"mono_file"`
+	DualFile string `json:"dual_file"`
+	Success  bool   `json:"success"`
+	Message  string `json:"message"`
+	Method   string `json:"method"` // "content_replacement" 或 "style_preserving"
 }
 
 // NewPDFReplacementIntegration 创建PDF替换集成
 func NewPDFReplacementIntegration(client *TranslatorClient) *PDFReplacementIntegration {
 	return &PDFReplacementIntegration{
 		client:                client,
-		contentReplacer:       NewPDFContentReplacer(),
+		regenerator:           NewPDFRegenerator(),
 		styleReplacer:         NewPDFStylePreservingReplacer(),
 		translatorIntegration: NewPDFTranslatorIntegration(client),
 	}
@@ -187,13 +187,13 @@ func (pri *PDFReplacementIntegration) performStylePreservingReplacement(request 
 
 	// 创建样式保留配置
 	config := StylePreservingConfig{
-		Mode:              string(request.Mode),
-		BilingualLayout:   string(request.BilingualLayout),
+		Mode:               string(request.Mode),
+		BilingualLayout:    string(request.BilingualLayout),
 		PreserveFormatting: true,
-		FontScale:         request.FontScale,
-		LineSpacing:       request.LineSpacing,
-		MarginAdjustment:  0,
-		ColorPreservation: true,
+		FontScale:          request.FontScale,
+		LineSpacing:        request.LineSpacing,
+		MarginAdjustment:   0,
+		ColorPreservation:  true,
 	}
 
 	result := &PDFReplacementResult{
@@ -204,7 +204,7 @@ func (pri *PDFReplacementIntegration) performStylePreservingReplacement(request 
 	// 生成输出文件路径
 	if request.Mode == ReplacementModeMonolingual {
 		result.MonoFile = filepath.Join(request.OutputDir, filename+"-mono-replaced.pdf")
-		
+
 		if progressCallback != nil {
 			progressCallback(0.8)
 		}
@@ -217,7 +217,7 @@ func (pri *PDFReplacementIntegration) performStylePreservingReplacement(request 
 		result.Message = fmt.Sprintf("单语PDF替换完成，保留原始样式: %s", result.MonoFile)
 	} else {
 		result.DualFile = filepath.Join(request.OutputDir, filename+"-dual-replaced.pdf")
-		
+
 		if progressCallback != nil {
 			progressCallback(0.8)
 		}
@@ -241,15 +241,6 @@ func (pri *PDFReplacementIntegration) performStylePreservingReplacement(request 
 func (pri *PDFReplacementIntegration) performBasicContentReplacement(request PDFReplacementRequest, filename string, translations map[string]string, progressCallback func(float64)) (*PDFReplacementResult, error) {
 	log.Printf("执行基础内容替换")
 
-	// 创建基础替换配置
-	config := PDFReplacementConfig{
-		Mode:           string(request.Mode),
-		PreserveLayout: true,
-		FontScale:      request.FontScale,
-		LineSpacing:    request.LineSpacing,
-		BilingualStyle: string(request.BilingualLayout),
-	}
-
 	result := &PDFReplacementResult{
 		Success: true,
 		Method:  "content_replacement",
@@ -258,30 +249,43 @@ func (pri *PDFReplacementIntegration) performBasicContentReplacement(request PDF
 	// 生成输出文件路径
 	if request.Mode == ReplacementModeMonolingual {
 		result.MonoFile = filepath.Join(request.OutputDir, filename+"-mono-replaced.pdf")
-		
+
 		if progressCallback != nil {
 			progressCallback(0.8)
 		}
 
-		err := pri.contentReplacer.ReplaceContent(request.InputPath, result.MonoFile, translations, config)
+		err := pri.regenerator.RegeneratePDF(request.InputPath, result.MonoFile, translations)
 		if err != nil {
-			return nil, fmt.Errorf("单语内容替换失败: %w", err)
+			return nil, fmt.Errorf("单语PDF重新生成失败: %w", err)
 		}
 
-		result.Message = fmt.Sprintf("单语PDF内容替换完成: %s", result.MonoFile)
+		result.Message = fmt.Sprintf("单语PDF重新生成完成: %s", result.MonoFile)
 	} else {
 		result.DualFile = filepath.Join(request.OutputDir, filename+"-dual-replaced.pdf")
-		
+
 		if progressCallback != nil {
 			progressCallback(0.8)
 		}
 
-		err := pri.contentReplacer.ReplaceContent(request.InputPath, result.DualFile, translations, config)
-		if err != nil {
-			return nil, fmt.Errorf("双语内容替换失败: %w", err)
+		// 对于双语模式，需要构建双语文本映射
+		bilingualMappings := make(map[string]string)
+		for original, translation := range translations {
+			switch request.BilingualLayout {
+			case BilingualLayoutSideBySide:
+				bilingualMappings[original] = original + " | " + translation
+			case BilingualLayoutInterleaved:
+				bilingualMappings[original] = original + "\n" + translation
+			default: // BilingualLayoutTopBottom
+				bilingualMappings[original] = original + "\n" + translation
+			}
 		}
 
-		result.Message = fmt.Sprintf("双语PDF内容替换完成，布局: %s，文件: %s", request.BilingualLayout, result.DualFile)
+		err := pri.regenerator.RegeneratePDF(request.InputPath, result.DualFile, bilingualMappings)
+		if err != nil {
+			return nil, fmt.Errorf("双语PDF重新生成失败: %w", err)
+		}
+
+		result.Message = fmt.Sprintf("双语PDF重新生成完成，布局: %s，文件: %s", request.BilingualLayout, result.DualFile)
 	}
 
 	if progressCallback != nil {

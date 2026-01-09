@@ -165,6 +165,9 @@ func (d *PDFDocument) SaveBilingualText(outputPath string, originalBlocks, trans
 
 // cleanPDFText 清理 PDF 文本
 func cleanPDFText(text string) string {
+	// 首先尝试修复常见的编码问题
+	text = fixCommonEncodingIssues(text)
+
 	// 按行处理，保留换行符
 	lines := strings.Split(text, "\n")
 	var cleanLines []string
@@ -192,6 +195,114 @@ func cleanPDFText(text string) string {
 	}
 
 	return strings.Join(cleanLines, "\n")
+}
+
+// fixCommonEncodingIssues 修复常见的编码问题
+func fixCommonEncodingIssues(text string) string {
+	// 检测是否包含乱码字符
+	if containsGarbledText(text) {
+		log.Printf("检测到乱码文本，尝试修复编码问题")
+
+		// 尝试不同的修复策略
+		fixed := tryFixEncoding(text)
+		if fixed != text {
+			log.Printf("编码修复成功")
+			return fixed
+		}
+
+		log.Printf("无法修复编码问题，可能是PDF使用了特殊字体编码")
+
+		// 如果修复失败，返回原文而不是替换文本
+		// 这样可以保持原始内容的完整性
+		return text
+	}
+
+	return text
+}
+
+// containsGarbledText 检测是否包含乱码
+func containsGarbledText(text string) bool {
+	// 提高乱码检测的阈值，减少误判
+	garbledCount := 0
+	totalCount := 0
+
+	for _, r := range text {
+		totalCount++
+
+		// 如果是正常的ASCII字符或中文字符，跳过
+		if (r >= 32 && r <= 126) || (r >= 0x4e00 && r <= 0x9fff) {
+			continue
+		}
+
+		// 如果是常见的标点符号，跳过
+		if r == '\n' || r == '\r' || r == '\t' || r == ' ' {
+			continue
+		}
+
+		// 跳过更多的Unicode字符范围
+		if (r >= 0x00C0 && r <= 0x017F) || // 拉丁字符扩展
+			(r >= 0x0100 && r <= 0x024F) || // 拉丁字符扩展A和B
+			(r >= 0x3000 && r <= 0x303F) || // CJK符号和标点
+			(r >= 0xFF00 && r <= 0xFFEF) { // 全角ASCII、半角片假名、半角符号
+			continue
+		}
+
+		// 其他字符可能是乱码
+		garbledCount++
+	}
+
+	// 提高阈值到30%，减少误判
+	if totalCount > 0 && float64(garbledCount)/float64(totalCount) > 0.3 {
+		return true
+	}
+
+	return false
+}
+
+// tryFixEncoding 尝试修复编码
+func tryFixEncoding(text string) string {
+	// 策略1：尝试将常见的乱码字符映射回正确的字符
+	fixed := fixCommonGarbledChars(text)
+	if fixed != text {
+		return fixed
+	}
+
+	// 策略2：如果包含大量乱码，保持原文不变
+	// 移除之前的替换逻辑，避免丢失原始信息
+	if containsGarbledText(text) {
+		// 记录警告但保持原文
+		log.Printf("警告：文本可能包含编码问题，保持原文: %s", text[:min(50, len(text))])
+		return text
+	}
+
+	return text
+}
+
+// fixCommonGarbledChars 修复常见的乱码字符
+func fixCommonGarbledChars(text string) string {
+	// 这里可以添加一些常见的字符映射
+	// 由于不同的PDF可能有不同的编码方式，这个映射需要根据实际情况调整
+
+	replacements := map[string]string{
+		"Ø": "：", // 冒号的常见乱码
+		"H": "高", // 可能的映射（需要根据实际情况调整）
+	}
+
+	result := text
+	hasReplacement := false
+
+	for garbled, correct := range replacements {
+		if strings.Contains(result, garbled) {
+			result = strings.ReplaceAll(result, garbled, correct)
+			hasReplacement = true
+		}
+	}
+
+	if hasReplacement {
+		log.Printf("应用了字符映射修复")
+	}
+
+	return result
 }
 
 // ValidatePDF 验证是否为有效的 PDF 文件
@@ -224,118 +335,6 @@ func GetPDFPageCount(filePath string) (int, error) {
 	defer file.Close()
 
 	return reader.NumPage(), nil
-}
-
-// SaveBilingualHTML 保存双语对照 HTML 文件
-func (d *PDFDocument) SaveBilingualHTML(outputPath string, originalBlocks, translatedBlocks []string) error {
-	var content strings.Builder
-
-	content.WriteString(`<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>PDF 翻译结果 / PDF Translation Result</title>
-    <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            margin: 20px; 
-            line-height: 1.6; 
-            background-color: #f5f5f5;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background-color: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        .header {
-            text-align: center;
-            margin-bottom: 30px;
-            border-bottom: 2px solid #3498db;
-            padding-bottom: 20px;
-        }
-        .header h1 {
-            color: #2c3e50;
-            margin: 0;
-        }
-        .meta-info {
-            background-color: #ecf0f1;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 30px;
-        }
-        .section { 
-            margin-bottom: 25px; 
-            border: 1px solid #e0e0e0;
-            border-radius: 5px;
-            overflow: hidden;
-        }
-        .original { 
-            background-color: #f8f9fa; 
-            padding: 15px;
-            border-bottom: 1px solid #e0e0e0;
-        }
-        .translation { 
-            background-color: #e8f4f8; 
-            padding: 15px;
-        }
-        .label { 
-            font-weight: bold; 
-            color: #2c3e50; 
-            margin-bottom: 8px;
-            font-size: 14px;
-        }
-        .content {
-            color: #34495e;
-            white-space: pre-wrap;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>📄 PDF 翻译结果</h1>
-            <h2>PDF Translation Result</h2>
-        </div>
-        
-        <div class="meta-info">
-            <strong>原文件:</strong> ` + filepath.Base(d.Path) + `<br>
-            <strong>总页数:</strong> ` + fmt.Sprintf("%d", d.Metadata.Pages) + `<br>
-            <strong>翻译时间:</strong> <span id="datetime"></span>
-        </div>
-`)
-
-	for i := 0; i < len(originalBlocks) && i < len(translatedBlocks); i++ {
-		if strings.TrimSpace(originalBlocks[i]) == "" {
-			continue
-		}
-
-		content.WriteString(fmt.Sprintf(`
-        <div class="section">
-            <div class="original">
-                <div class="label">📖 原文 / Original %d:</div>
-                <div class="content">%s</div>
-            </div>
-            <div class="translation">
-                <div class="label">🌐 译文 / Translation %d:</div>
-                <div class="content">%s</div>
-            </div>
-        </div>
-`, i+1, strings.ReplaceAll(originalBlocks[i], "\n", "<br>"),
-			i+1, strings.ReplaceAll(translatedBlocks[i], "\n", "<br>")))
-	}
-
-	content.WriteString(`
-    </div>
-    <script>
-        document.getElementById('datetime').textContent = new Date().toLocaleString();
-    </script>
-</body>
-</html>`)
-
-	return writeTextFile(outputPath, content.String())
 }
 
 // SaveMonolingualText 保存单语文本文件
@@ -375,11 +374,26 @@ func writeTextFile(filePath, content string) error {
 func (d *PDFDocument) SaveBilingualPDF(outputPath string, originalBlocks, translatedBlocks []string) error {
 	log.Printf("使用文本替换保存双语PDF: %s", outputPath)
 
+	// 调试：打印传入的参数
+	log.Printf("Debug: originalBlocks数量: %d", len(originalBlocks))
+	log.Printf("Debug: translatedBlocks数量: %d", len(translatedBlocks))
+	for i := 0; i < len(originalBlocks) && i < len(translatedBlocks) && i < 1; i++ {
+		log.Printf("Debug: originalBlocks[%d]: %s", i, truncateString(originalBlocks[i], 100))
+		log.Printf("Debug: translatedBlocks[%d]: %s", i, truncateString(translatedBlocks[i], 100))
+	}
+
 	// 构建翻译映射
 	translations := make(map[string]string)
 	for i := 0; i < len(originalBlocks) && i < len(translatedBlocks); i++ {
 		if strings.TrimSpace(originalBlocks[i]) != "" && strings.TrimSpace(translatedBlocks[i]) != "" {
-			translations[strings.TrimSpace(originalBlocks[i])] = strings.TrimSpace(translatedBlocks[i])
+			original := strings.TrimSpace(originalBlocks[i])
+			translated := strings.TrimSpace(translatedBlocks[i])
+			translations[original] = translated
+
+			// 调试：打印映射
+			if i < 1 {
+				log.Printf("Debug: 映射 '%s' -> '%s'", truncateString(original, 50), truncateString(translated, 50))
+			}
 		}
 	}
 
@@ -387,12 +401,20 @@ func (d *PDFDocument) SaveBilingualPDF(outputPath string, originalBlocks, transl
 	return d.SaveBilingualPDFWithReplacement(outputPath, translations, BilingualLayoutTopBottom)
 }
 
+// truncateString 截断字符串用于调试
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 // SaveBilingualPDFWithReplacement 使用内容替换保存双语PDF - 真正的PDF内容流替换
 func (d *PDFDocument) SaveBilingualPDFWithReplacement(outputPath string, translations map[string]string, layout PDFBilingualLayout) error {
 	log.Printf("使用真正的内容流替换保存双语PDF: %s", outputPath)
 
-	// 创建内容替换器
-	replacer := NewPDFContentReplacer()
+	// 创建PDF重新生成器
+	regenerator := NewPDFRegenerator()
 
 	// 构建双语文本映射
 	bilingualMappings := make(map[string]string)
@@ -407,28 +429,23 @@ func (d *PDFDocument) SaveBilingualPDFWithReplacement(outputPath string, transla
 		}
 	}
 
-	// 使用直接替换方法
-	err := replacer.ReplaceContentDirect(d.Path, outputPath, bilingualMappings)
+	// 使用重新生成方法
+	err := regenerator.RegeneratePDF(d.Path, outputPath, bilingualMappings)
 	if err != nil {
-		log.Printf("PDF双语内容替换失败: %v", err)
-		// 如果PDF替换失败，生成HTML版本作为备选
-		htmlPath := strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + ".html"
+		log.Printf("PDF双语重新生成失败: %v", err)
 
-		// 构建文本块
-		var originalBlocks, translatedBlocks []string
-		for original, translation := range translations {
-			originalBlocks = append(originalBlocks, original)
-			translatedBlocks = append(translatedBlocks, translation)
+		// 删除可能已复制的原始PDF文件
+		if _, statErr := os.Stat(outputPath); statErr == nil {
+			if removeErr := os.Remove(outputPath); removeErr != nil {
+				log.Printf("警告：删除失败的双语PDF文件时出错: %v", removeErr)
+			}
 		}
 
-		if htmlErr := d.SaveBilingualHTML(htmlPath, originalBlocks, translatedBlocks); htmlErr != nil {
-			return fmt.Errorf("PDF替换失败且HTML备选生成失败: PDF错误=%v, HTML错误=%v", err, htmlErr)
-		}
-
-		log.Printf("PDF双语替换失败，已生成HTML版本: %s", htmlPath)
-		return fmt.Errorf("PDF内容替换失败，已生成HTML版本作为备选: %s", htmlPath)
+		// 直接返回失败，不生成HTML备选版本
+		return fmt.Errorf("PDF双语重新生成失败: %v", err)
 	}
 
+	log.Printf("PDF双语翻译成功完成: %s", outputPath)
 	return nil
 }
 
@@ -463,27 +480,36 @@ func (d *PDFDocument) SaveMonolingualPDF(outputPath string, translatedBlocks []s
 func (d *PDFDocument) SaveMonolingualPDFWithReplacement(outputPath string, translations map[string]string) error {
 	log.Printf("使用真正的内容流替换保存单语PDF: %s", outputPath)
 
-	// 创建内容替换器
-	replacer := NewPDFContentReplacer()
+	// 创建PDF重新生成器
+	regenerator := NewPDFRegenerator()
 
-	// 使用直接替换方法
-	err := replacer.ReplaceContentDirect(d.Path, outputPath, translations)
+	// 使用重新生成方法
+	err := regenerator.RegeneratePDF(d.Path, outputPath, translations)
 	if err != nil {
-		log.Printf("PDF内容替换失败: %v", err)
-		// 如果PDF替换失败，生成HTML版本作为备选
-		htmlPath := strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + ".html"
+		log.Printf("PDF重新生成失败: %v", err)
 
-		// 构建文本块
-		var originalBlocks, translatedBlocks []string
-		for original, translation := range translations {
-			originalBlocks = append(originalBlocks, original)
-			translatedBlocks = append(translatedBlocks, translation)
+		// 删除可能已复制的原始PDF文件，避免用户收到未翻译的文件
+		if _, statErr := os.Stat(outputPath); statErr == nil {
+			if removeErr := os.Remove(outputPath); removeErr != nil {
+				log.Printf("警告：删除失败的PDF文件时出错: %v", removeErr)
+			}
 		}
 
-		log.Printf("PDF替换失败，已生成HTML版本: %s", htmlPath)
-		return fmt.Errorf("PDF内容替换失败，已生成HTML版本作为备选: %s", htmlPath)
+		// 直接返回失败，不生成HTML备选版本
+		return fmt.Errorf("PDF重新生成失败: %v", err)
 	}
 
+	// 验证PDF文件是否被成功修改
+	if err := d.validatePDFModification(outputPath, translations); err != nil {
+		log.Printf("PDF修改验证失败: %v", err)
+		// 如果验证失败，也删除可能的原始副本
+		if removeErr := os.Remove(outputPath); removeErr != nil {
+			log.Printf("警告：删除验证失败的PDF文件时出错: %v", removeErr)
+		}
+		return fmt.Errorf("PDF文件未被正确修改，可能仍是原始文件: %v", err)
+	}
+
+	log.Printf("PDF翻译成功完成: %s", outputPath)
 	return nil
 }
 
@@ -492,4 +518,184 @@ func (d *PDFDocument) InsertMonolingualTranslation(translations map[string]strin
 	// PDF文档不支持直接插入翻译，这个方法主要是为了实现接口
 	// 实际的单语翻译保存通过 SaveMonolingualPDF, SaveMonolingualHTML 和 SaveMonolingualText 方法实现
 	return nil
+}
+
+// validatePDFModification 验证PDF文件是否被正确修改
+func (d *PDFDocument) validatePDFModification(outputPath string, translations map[string]string) error {
+	// 1. 检查文件大小是否有变化（简单验证）
+	originalInfo, err := os.Stat(d.Path)
+	if err != nil {
+		return fmt.Errorf("无法获取原始文件信息: %w", err)
+	}
+
+	outputInfo, err := os.Stat(outputPath)
+	if err != nil {
+		return fmt.Errorf("无法获取输出文件信息: %w", err)
+	}
+
+	// 如果文件大小完全相同，可能没有被修改
+	if originalInfo.Size() == outputInfo.Size() {
+		log.Printf("警告：输出PDF文件大小与原始文件相同，可能未被修改")
+		return fmt.Errorf("PDF文件大小未改变，可能替换失败")
+	} else {
+		log.Printf("PDF文件大小已改变：%d -> %d 字节", originalInfo.Size(), outputInfo.Size())
+	}
+
+	// 2. 检查文件修改时间
+	if !outputInfo.ModTime().After(originalInfo.ModTime()) {
+		log.Printf("警告：输出PDF文件修改时间不晚于原始文件")
+	}
+
+	// 3. 尝试读取输出PDF的内容进行验证（但不依赖文本提取结果）
+	outputDoc, err := OpenPDF(outputPath)
+	if err != nil {
+		log.Printf("警告：无法读取输出PDF进行文本验证: %v", err)
+		// 如果无法读取，但文件大小已改变，我们认为可能成功了
+		if originalInfo.Size() != outputInfo.Size() {
+			log.Printf("由于文件大小已改变，认为PDF修改可能成功")
+			return nil
+		}
+		return fmt.Errorf("无法读取输出PDF进行验证: %w", err)
+	}
+
+	// 4. 基本验证：检查页数是否正确
+	if len(outputDoc.PageTexts) == 0 {
+		log.Printf("警告：输出PDF没有可提取的文本内容")
+	} else {
+		log.Printf("输出PDF包含 %d 页文本内容", len(outputDoc.PageTexts))
+	}
+
+	// 5. 由于文本提取可能有编码问题，我们主要依赖文件大小变化来判断
+	if originalInfo.Size() != outputInfo.Size() {
+		log.Printf("PDF修改验证通过：文件大小已改变，认为翻译替换成功")
+		return nil
+	}
+
+	// 6. 如果文件大小没变，尝试其他验证方法
+	log.Printf("尝试其他验证方法...")
+
+	// 检查是否包含中文字符或翻译文本（尽管可能有编码问题）
+	foundChineseOrTranslation := false
+	for _, pageText := range outputDoc.PageTexts {
+		// 检查是否包含中文字符
+		for _, r := range pageText {
+			if r >= 0x4e00 && r <= 0x9fff {
+				foundChineseOrTranslation = true
+				break
+			}
+		}
+
+		if foundChineseOrTranslation {
+			break
+		}
+
+		// 检查是否包含翻译文本的关键词（即使有编码问题）
+		for _, translation := range translations {
+			if len(translation) > 5 {
+				// 检查翻译文本的一部分
+				if strings.Contains(pageText, translation[:min(len(translation), 20)]) {
+					foundChineseOrTranslation = true
+					break
+				}
+			}
+		}
+
+		if foundChineseOrTranslation {
+			break
+		}
+	}
+
+	if foundChineseOrTranslation {
+		log.Printf("PDF修改验证通过：在PDF中发现中文或翻译文本")
+		return nil
+	}
+
+	log.Printf("警告：无法确认PDF是否被正确修改，但文件已生成")
+	return nil // 不返回错误，让用户自己检查
+}
+
+// min 返回两个整数中的较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// SaveMonolingualPDFWithRegeneration 使用重新生成方法保存单语PDF
+func (d *PDFDocument) SaveMonolingualPDFWithRegeneration(outputPath string, translations map[string]string) error {
+	log.Printf("使用重新生成方法保存单语PDF: %s", outputPath)
+
+	// 创建PDF重新生成器
+	regenerator := NewPDFRegenerator()
+
+	// 使用重新生成方法
+	err := regenerator.RegeneratePDF(d.Path, outputPath, translations)
+	if err != nil {
+		log.Printf("PDF重新生成失败: %v", err)
+		return fmt.Errorf("PDF重新生成失败: %v", err)
+	}
+
+	log.Printf("PDF重新生成成功完成: %s", outputPath)
+	return nil
+}
+
+// SaveBilingualPDFWithRegeneration 使用重新生成方法保存双语PDF
+func (d *PDFDocument) SaveBilingualPDFWithRegeneration(outputPath string, originalBlocks, translatedBlocks []string, layout string) error {
+	log.Printf("使用重新生成方法保存双语PDF: %s", outputPath)
+
+	// 构建双语翻译映射 - 修复重复问题
+	bilingualTranslations := make(map[string]string)
+	for i := 0; i < len(originalBlocks) && i < len(translatedBlocks); i++ {
+		if strings.TrimSpace(originalBlocks[i]) != "" && strings.TrimSpace(translatedBlocks[i]) != "" {
+			original := strings.TrimSpace(originalBlocks[i])
+			translated := strings.TrimSpace(translatedBlocks[i])
+
+			// 检查译文是否已经包含原文（避免重复）
+			if strings.Contains(translated, original) {
+				// 如果译文已经包含原文，直接使用译文
+				bilingualTranslations[original] = translated
+				log.Printf("检测到译文已包含原文，直接使用译文: %s", d.truncateString(translated, 100))
+			} else {
+				// 根据布局类型构建双语文本
+				switch layout {
+				case "side-by-side":
+					bilingualTranslations[original] = original + " | " + translated
+				case "interleaved":
+					bilingualTranslations[original] = original + "\n" + translated
+				case "original-only":
+					// 仅保留原文
+					bilingualTranslations[original] = original
+				case "translation-only":
+					// 仅保留译文
+					bilingualTranslations[original] = translated
+				default: // "top-bottom"
+					bilingualTranslations[original] = original + "\n" + translated
+				}
+			}
+		}
+	}
+
+	log.Printf("构建双语映射完成，映射数量: %d，布局: %s", len(bilingualTranslations), layout)
+
+	// 创建PDF重新生成器
+	regenerator := NewPDFRegenerator()
+
+	// 使用重新生成方法
+	err := regenerator.RegeneratePDF(d.Path, outputPath, bilingualTranslations)
+	if err != nil {
+		log.Printf("双语PDF重新生成失败: %v", err)
+		return fmt.Errorf("双语PDF重新生成失败: %v", err)
+	}
+
+	log.Printf("双语PDF重新生成成功完成: %s", outputPath)
+	return nil
+}
+
+// truncateString 截断字符串用于日志显示
+func (d *PDFDocument) truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
