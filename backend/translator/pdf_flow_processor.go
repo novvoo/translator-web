@@ -2742,7 +2742,8 @@ func (p *PDFFlowProcessor) extractResources() error {
 // findBestTranslation 查找最佳翻译 - 改进版本
 func (p *PDFFlowProcessor) findBestTranslation(text string, translations map[string]string) string {
 	// 跳过空文本或过短的文本
-	if len(strings.TrimSpace(text)) < 2 {
+	cleanText := strings.TrimSpace(text)
+	if len(cleanText) < 3 {
 		return ""
 	}
 
@@ -2755,27 +2756,33 @@ func (p *PDFFlowProcessor) findBestTranslation(text string, translations map[str
 		return translation
 	}
 
-	// 2. 标准化匹配
-	normalizedText := p.normalizeText(text)
+	// 2. 清理后的精确匹配
+	cleanText = p.normalizeText(text)
 	for original, translation := range translations {
-		if p.normalizeText(original) == normalizedText {
+		if p.normalizeText(original) == cleanText {
 			p.logger.Debug("找到标准化匹配", map[string]interface{}{
 				"原文":  text,
-				"标准化": normalizedText,
+				"标准化": cleanText,
 				"翻译":  translation,
 			})
 			return translation
 		}
 	}
 
-	// 3. 改进的部分匹配 - 更智能的匹配策略
+	// 3. 改进的相似度匹配 - 更严格的匹配
 	bestMatch := ""
 	bestScore := 0.0
 	bestOriginal := ""
 
 	for original, translation := range translations {
-		score := p.calculateSimilarity(text, original)
-		if score > bestScore && score > 0.6 { // 降低阈值以提高匹配率
+		// 只对长度相近的文本进行相似度计算
+		lenRatio := float64(len(cleanText)) / float64(len(original))
+		if lenRatio < 0.3 || lenRatio > 3.0 {
+			continue // 长度差异太大，跳过
+		}
+
+		score := p.calculateSimilarity(cleanText, original)
+		if score > bestScore && score > 0.8 { // 提高阈值以确保准确性
 			bestScore = score
 			bestMatch = translation
 			bestOriginal = original
@@ -2792,53 +2799,29 @@ func (p *PDFFlowProcessor) findBestTranslation(text string, translations map[str
 		return bestMatch
 	}
 
-	// 4. 包含关系匹配 - 双向检查
+	// 4. 包含关系匹配 - 更严格的条件
 	for original, translation := range translations {
-		// 检查当前文本是否包含在原文中
-		if len(text) > 5 && strings.Contains(original, text) {
-			p.logger.Debug("找到子字符串匹配", map[string]interface{}{
-				"原文":  text,
-				"源文本": original,
-				"翻译":  translation,
-			})
-			return translation
-		}
-		// 检查原文是否包含在当前文本中
-		if len(original) > 5 && strings.Contains(text, original) {
-			p.logger.Debug("找到包含匹配", map[string]interface{}{
-				"原文":  text,
-				"源文本": original,
-				"翻译":  translation,
-			})
-			return translation
-		}
-	}
-
-	// 5. 单词级别匹配 - 检查是否有足够的共同单词
-	textWords := p.extractWords(text)
-	if len(textWords) >= 2 {
-		for original, translation := range translations {
-			originalWords := p.extractWords(original)
-			commonWords := p.countCommonWords(textWords, originalWords)
-
-			// 如果有超过一半的单词匹配，认为是相关的
-			if len(textWords) > 0 && float64(commonWords)/float64(len(textWords)) > 0.5 {
-				p.logger.Debug("找到单词级匹配", map[string]interface{}{
-					"原文":   text,
-					"源文本":  original,
-					"翻译":   translation,
-					"共同单词": commonWords,
-					"匹配率":  fmt.Sprintf("%.1f%%", float64(commonWords)/float64(len(textWords))*100),
-				})
-				return translation
+		// 检查当前文本是否是原文的主要部分
+		if len(cleanText) > 10 && len(original) > 10 {
+			if strings.Contains(original, cleanText) {
+				// 确保匹配的部分占原文的主要部分
+				if float64(len(cleanText))/float64(len(original)) > 0.6 {
+					p.logger.Debug("找到主要部分匹配", map[string]interface{}{
+						"原文":  text,
+						"源文本": original,
+						"翻译":  translation,
+						"匹配率": fmt.Sprintf("%.1f%%", float64(len(cleanText))/float64(len(original))*100),
+					})
+					return translation
+				}
 			}
 		}
 	}
 
-	// 6. 关键词匹配 - 如果文本包含翻译源的关键词
+	// 5. 关键短语匹配 - 检查是否包含相同的关键短语
 	for original, translation := range translations {
-		if p.containsKeywords(text, original) {
-			p.logger.Debug("找到关键词匹配", map[string]interface{}{
+		if p.hasSignificantOverlap(cleanText, original) {
+			p.logger.Debug("找到关键短语匹配", map[string]interface{}{
 				"原文":   text,
 				"关键词源": original,
 				"翻译":   translation,
@@ -2994,6 +2977,76 @@ func (p *PDFFlowProcessor) normalizeText(text string) string {
 	return strings.ToLower(text)
 }
 
+// hasSignificantOverlap 检查两个文本是否有显著重叠
+func (p *PDFFlowProcessor) hasSignificantOverlap(text1, text2 string) bool {
+	// 提取关键词（长度大于3的单词）
+	words1 := p.extractSignificantWords(text1)
+	words2 := p.extractSignificantWords(text2)
+
+	if len(words1) == 0 || len(words2) == 0 {
+		return false
+	}
+
+	// 计算重叠的关键词数量
+	overlap := 0
+	for _, word1 := range words1 {
+		for _, word2 := range words2 {
+			if strings.EqualFold(word1, word2) {
+				overlap++
+				break
+			}
+		}
+	}
+
+	// 如果重叠的关键词占较小集合的50%以上，认为有显著重叠
+	minWords := len(words1)
+	if len(words2) < minWords {
+		minWords = len(words2)
+	}
+
+	return float64(overlap)/float64(minWords) > 0.5
+}
+
+// extractSignificantWords 提取有意义的单词
+func (p *PDFFlowProcessor) extractSignificantWords(text string) []string {
+	// 分割单词
+	words := strings.FieldsFunc(text, func(c rune) bool {
+		return !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
+	})
+
+	var significantWords []string
+	for _, word := range words {
+		// 只保留长度大于3的单词，过滤常见停用词
+		if len(word) > 3 && !p.isStopWord(word) {
+			significantWords = append(significantWords, strings.ToLower(word))
+		}
+	}
+
+	return significantWords
+}
+
+// isStopWord 检查是否为停用词
+func (p *PDFFlowProcessor) isStopWord(word string) bool {
+	stopWords := map[string]bool{
+		"the": true, "and": true, "for": true, "are": true, "but": true,
+		"not": true, "you": true, "all": true, "can": true, "had": true,
+		"was": true, "one": true, "our": true, "out": true,
+		"day": true, "get": true, "has": true, "him": true, "his": true,
+		"how": true, "its": true, "may": true, "new": true, "now": true,
+		"old": true, "see": true, "two": true, "who": true, "boy": true,
+		"did": true, "she": true, "use": true, "way": true,
+		"many": true, "then": true, "them": true, "were": true,
+		"with": true, "have": true, "this": true, "will": true, "your": true,
+		"from": true, "they": true, "know": true, "want": true, "been": true,
+		"good": true, "much": true, "some": true, "time": true, "very": true,
+		"when": true, "come": true, "here": true, "just": true, "like": true,
+		"long": true, "make": true, "said": true, "take": true, "than": true,
+		"only": true, "over": true, "think": true, "also": true, "back": true,
+		"after": true, "first": true, "year": true,
+	}
+	return stopWords[strings.ToLower(word)]
+}
+
 // calculateTextBounds 计算文本边界
 func (p *PDFFlowProcessor) calculateTextBounds(text string, font FontFlow) (BoundingBox, error) {
 	// 改进的文本边界计算
@@ -3126,15 +3179,27 @@ func (p *PDFFlowProcessor) setupFonts(pdf *gofpdf.Fpdf) error {
 
 	if fontPath != "" {
 		fontName := strings.TrimSuffix(filepath.Base(fontPath), filepath.Ext(fontPath))
+
+		// 确保字体名称是有效的
+		if fontName == "" {
+			fontName = "SimHei"
+		}
+
+		// 添加UTF8字体
 		pdf.AddUTF8Font(fontName, "", fontPath)
 
 		if err := pdf.Error(); err != nil {
 			log.Printf("警告：添加通用字体失败: %v", err)
+			// 尝试使用内置字体作为备用
+			p.UniFontName = "Arial"
 		} else {
 			log.Printf("成功添加通用字体: %s", fontName)
 			// 保存字体名称供后续使用
 			p.UniFontName = fontName
 		}
+	} else {
+		log.Printf("警告：未找到系统字体，使用默认字体")
+		p.UniFontName = "Arial"
 	}
 
 	return nil
@@ -3206,9 +3271,19 @@ func (p *PDFFlowProcessor) generatePage(pdf *gofpdf.Fpdf, page PDFPageFlow) erro
 func (p *PDFFlowProcessor) renderTextElement(pdf *gofpdf.Fpdf, element TextElementFlow, index int) error {
 	// 设置字体
 	fontName := "Arial"
+	fontSize := element.Font.Size
+
+	// 确保字体大小合理
+	if fontSize <= 0 {
+		fontSize = 12
+	}
+	if fontSize > 72 {
+		fontSize = 72
+	}
+
 	if p.containsUni(element.Content) {
 		// 使用已添加的通用字体
-		if p.UniFontName != "" {
+		if p.UniFontName != "" && p.UniFontName != "Arial" {
 			fontName = p.UniFontName
 		} else {
 			// 如果没有通用字体，尝试使用Arial作为备用
@@ -3216,7 +3291,7 @@ func (p *PDFFlowProcessor) renderTextElement(pdf *gofpdf.Fpdf, element TextEleme
 		}
 	}
 
-	pdf.SetFont(fontName, "", element.Font.Size)
+	pdf.SetFont(fontName, "", fontSize)
 
 	// 设置颜色
 	if element.Color.Space == "RGB" && len(element.Color.Values) >= 3 {
@@ -3224,14 +3299,25 @@ func (p *PDFFlowProcessor) renderTextElement(pdf *gofpdf.Fpdf, element TextEleme
 		g := int(element.Color.Values[1] * 255)
 		b := int(element.Color.Values[2] * 255)
 		pdf.SetTextColor(r, g, b)
+	} else {
+		// 默认黑色
+		pdf.SetTextColor(0, 0, 0)
 	}
 
-	// 智能处理文本长度
-	content := element.Content
+	// 智能处理文本内容
+	content := strings.TrimSpace(element.Content)
+	if content == "" {
+		return nil // 跳过空内容
+	}
+
+	// 处理过长的文本
 	maxWidth := element.BoundingBox.Width
+	if maxWidth <= 0 {
+		maxWidth = 500 // 默认最大宽度
+	}
 
 	// 如果文本太长，进行智能截断或分行处理
-	if len(content) > 100 { // 如果文本超过100个字符
+	if len(content) > 200 { // 如果文本超过200个字符
 		// 尝试在合适的位置截断
 		if strings.Contains(content, "\n") {
 			// 如果包含换行符，只取第一行
@@ -3239,10 +3325,10 @@ func (p *PDFFlowProcessor) renderTextElement(pdf *gofpdf.Fpdf, element TextEleme
 			content = lines[0]
 		} else {
 			// 智能截断：优先在句号、逗号等标点处截断
-			truncatePos := 80
-			for i := 60; i < len(content) && i < 100; i++ {
+			truncatePos := 150
+			for i := 100; i < len(content) && i < 200; i++ {
 				char := rune(content[i])
-				if char == '。' || char == '，' || char == '.' || char == ',' || char == ' ' {
+				if char == '。' || char == '，' || char == '.' || char == ',' || char == ' ' || char == '；' {
 					truncatePos = i + 1
 					break
 				}
@@ -3255,32 +3341,46 @@ func (p *PDFFlowProcessor) renderTextElement(pdf *gofpdf.Fpdf, element TextEleme
 
 	// 检查文本宽度是否超出边界
 	textWidth := pdf.GetStringWidth(content)
-	if textWidth > maxWidth && maxWidth > 0 {
+	if textWidth > maxWidth && maxWidth > 50 {
 		// 如果文本宽度超出，尝试缩小字体
-		originalSize := element.Font.Size
-		newSize := originalSize * (maxWidth / textWidth) * 0.9 // 留10%边距
-		if newSize < 6 {                                       // 最小字体大小
-			newSize = 6
+		newSize := fontSize * (maxWidth / textWidth) * 0.85 // 留15%边距
+		if newSize < 8 {                                    // 最小字体大小
+			newSize = 8
 		}
-		pdf.SetFont(fontName, "", newSize)
-
-		p.logger.Debug("调整字体大小", map[string]interface{}{
-			"原始大小": originalSize,
-			"新大小":  newSize,
-			"文本宽度": textWidth,
-			"最大宽度": maxWidth,
-		})
+		if newSize < fontSize {
+			pdf.SetFont(fontName, "", newSize)
+			p.logger.Debug("调整字体大小", map[string]interface{}{
+				"原始大小": fontSize,
+				"新大小":  newSize,
+				"文本宽度": textWidth,
+				"最大宽度": maxWidth,
+			})
+		}
 	}
 
 	// 智能位置调整 - 避免文本重叠
 	posX := element.Position.X
 	posY := element.Position.Y
 
+	// 确保位置在合理范围内
+	if posX < 0 {
+		posX = 50
+	}
+	if posY < 0 {
+		posY = 50
+	}
+	if posX > 500 {
+		posX = 500
+	}
+	if posY > 750 {
+		posY = 750
+	}
+
 	// 如果位置看起来不合理（比如都堆叠在同一位置），进行调整
-	if posX == 72 && posY == 720 {
+	if (posX == 72 && posY == 720) || (posX == 108 && posY > 700) {
 		// 这是默认位置，需要根据索引进行调整
-		posX = 72 + float64(index%3)*150 // 水平分布：72, 222, 372
-		posY = 720 - float64(index/3)*25 // 垂直分布：每3个元素下移25点
+		posX = 50 + float64(index%2)*250 // 水平分布：50, 300
+		posY = 750 - float64(index/2)*20 // 垂直分布：每2个元素下移20点
 
 		p.logger.Debug("调整重叠位置", map[string]interface{}{
 			"索引":   index,
@@ -3293,7 +3393,18 @@ func (p *PDFFlowProcessor) renderTextElement(pdf *gofpdf.Fpdf, element TextEleme
 
 	// 设置位置并输出文本
 	pdf.SetXY(posX, posY)
-	pdf.Cell(element.BoundingBox.Width, element.BoundingBox.Height, content)
+
+	// 计算合适的单元格尺寸
+	cellWidth := element.BoundingBox.Width
+	if cellWidth <= 0 {
+		cellWidth = pdf.GetStringWidth(content) + 10
+	}
+	cellHeight := element.BoundingBox.Height
+	if cellHeight <= 0 {
+		cellHeight = fontSize * 1.2
+	}
+
+	pdf.Cell(cellWidth, cellHeight, content)
 
 	return nil
 }
