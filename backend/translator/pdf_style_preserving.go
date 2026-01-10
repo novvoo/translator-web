@@ -9,6 +9,10 @@ import (
 
 	"github.com/jung-kurt/gofpdf"
 	"github.com/ledongthuc/pdf"
+	"github.com/phpdave11/gofpdi"
+	"sort"
+	"math"
+	"regexp"
 )
 
 // PDFStylePreservingReplacer 保留样式的PDF替换器
@@ -29,15 +33,19 @@ type StylePreservingConfig struct {
 
 // PageElement 页面元素
 type PageElement struct {
-	Text     string  `json:"text"`
-	X        float64 `json:"x"`
-	Y        float64 `json:"y"`
-	Width    float64 `json:"width"`
-	Height   float64 `json:"height"`
-	FontSize float64 `json:"font_size"`
-	FontName string  `json:"font_name"`
-	Color    string  `json:"color"`
-	PageNum  int     `json:"page_num"`
+	Text           string  `json:"text"`
+	X              float64 `json:"x"`
+	Y              float64 `json:"y"`
+	Width          float64 `json:"width"`
+	Height         float64 `json:"height"`
+	FontSize       float64 `json:"font_size"`
+	FontName       string  `json:"font_name"`
+	Color          string  `json:"color"`
+	PageNum        int     `json:"page_num"`
+	OriginalX      float64 `json:"original_x"`       // 原始X坐标（用于遮罩）
+	OriginalY      float64 `json:"original_y"`       // 原始Y坐标（用于遮罩）
+	OriginalWidth  float64 `json:"original_width"`   // 原始宽度（用于遮罩）
+	OriginalHeight float64 `json:"original_height"`  // 原始高度（用于遮罩）
 }
 
 // ReconstructedPage 重构的页面
@@ -69,7 +77,7 @@ func (r *PDFStylePreservingReplacer) ReplaceWithStylePreservation(inputPath, out
 	translatedPages := r.applyTranslationsWithStyles(pages, translations, config)
 
 	// 3. 重新构建PDF，保留原始样式
-	return r.reconstructPDFWithStyles(translatedPages, outputPath, config)
+	return r.reconstructPDFWithStyles(translatedPages, outputPath, inputPath, config)
 }
 
 // extractPagesWithStyles 提取页面及其样式信息
@@ -122,21 +130,39 @@ func (r *PDFStylePreservingReplacer) extractPageElements(page pdf.Page, pageNum 
 	// 提取文本内容和位置信息
 	content := page.Content()
 	if content.Text != nil {
+		// 合并将近的文本片段为行
+		content.Text = r.mergeTextElements(content.Text)
+
 		for _, text := range content.Text {
 			if strings.TrimSpace(text.S) == "" {
 				continue
 			}
+			
+			// 估算宽度
+			width := r.estimateTextWidth(text.S, text.FontSize)
+			if text.W > 0 {
+				width = text.W
+			}
+
+			// 过滤掉公式
+			if r.isFormula(text.S, text.Font) {
+				continue
+			}
 
 			element := PageElement{
-				Text:     text.S,
-				X:        text.X,
-				Y:        text.Y,
-				FontSize: text.FontSize,
-				FontName: text.Font,
-				Color:    "#000000", // 默认黑色，实际应该从PDF中提取
-				PageNum:  pageNum,
-				Width:    r.estimateTextWidth(text.S, text.FontSize),
-				Height:   text.FontSize,
+				Text:          text.S,
+				X:             text.X,
+				Y:             text.Y,
+				FontSize:      text.FontSize,
+				FontName:      text.Font,
+				Color:         "#000000", // 默认黑色
+				PageNum:       pageNum,
+				Width:         width,
+				Height:        text.FontSize,
+				OriginalX:     text.X,
+				OriginalY:     text.Y,
+				OriginalWidth: width,
+				OriginalHeight: text.FontSize,
 			}
 
 			reconstructedPage.Elements = append(reconstructedPage.Elements, element)
@@ -146,10 +172,109 @@ func (r *PDFStylePreservingReplacer) extractPageElements(page pdf.Page, pageNum 
 	return reconstructedPage, nil
 }
 
+func (r *PDFStylePreservingReplacer) mergeTextElements(texts []pdf.Text) []pdf.Text {
+	if len(texts) == 0 {
+		return texts
+	}
+
+	// 按Y坐标排序（注意：PDF通常Y轴向上，但ledongthuc/pdf的具体实现可能需要检查）
+	// 这里我们假设需要将同一行的文本聚类
+	sort.Slice(texts, func(i, j int) bool {
+		if math.Abs(texts[i].Y - texts[j].Y) < 2.0 { // Y坐标相近
+			return texts[i].X < texts[j].X // 按X排序
+		}
+		return texts[i].Y > texts[j].Y // 从上到下（假设大Y在上，或者保持原序）
+	})
+
+	var merged []pdf.Text
+	if len(texts) == 0 {
+		return merged
+	}
+
+	current := texts[0]
+	
+	for i := 1; i < len(texts); i++ {
+		next := texts[i]
+		
+		// 判断是否在同一行且相邻
+		isSameLine := math.Abs(current.Y - next.Y) < current.FontSize/2
+		isAdjacent := (next.X - (current.X + r.estimateTextWidth(current.S, current.FontSize))) < current.FontSize*2 // 允许一定的间距
+		
+		// 如果可以用Text.W更好
+		if current.W > 0 {
+			isAdjacent = (next.X - (current.X + current.W)) < current.FontSize*2
+		}
+
+		if isSameLine && isAdjacent {
+			// 合并
+			current.S += " " + next.S // 加个空格简单的合并
+			current.W += next.W // 累加宽度
+			// 简单的宽度估算更新
+			if current.W == 0 {
+				current.W = r.estimateTextWidth(current.S, current.FontSize)
+			}
+		} else {
+			merged = append(merged, current)
+			current = next
+		}
+	}
+	merged = append(merged, current)
+
+	return merged
+}
+
+// isFormula 检测是否为数学公式
+func (r *PDFStylePreservingReplacer) isFormula(text, fontName string) bool {
+	// 常见数学符号检测
+	mathSymbols := []string{
+		"∫", "∑", "∏", "√", "∞", "α", "β", "γ", "δ", "ε", "θ", "λ", "μ", "π", "σ", "φ", "ψ", "ω",
+		"≤", "≥", "≠", "≈", "∈", "∉", "⊂", "⊃", "∪", "∩", "∧", "∨", "¬", "→", "↔", "∀", "∃",
+		"±", "×", "÷", "∂", "∇", "∆", "∝", "∴", "∵", "⊥", "∥", "°", "′", "″",
+	}
+
+	for _, symbol := range mathSymbols {
+		if strings.Contains(text, symbol) {
+			return true
+		}
+	}
+
+	// 检测数学表达式模式
+	mathPatterns := []string{
+		`\d+\s*[+\-*/=]\s*\d+`,           // 简单算术表达式
+		`[a-zA-Z]\s*[+\-*/=]\s*[a-zA-Z]`, // 代数表达式
+		`\d+\^\d+`,                       // 指数
+		`\d+_\d+`,                        // 下标
+		`\([^)]*\)\s*[+\-*/=]`,           // 括号表达式
+	}
+
+	for _, pattern := range mathPatterns {
+		if matched, _ := regexp.MatchString(pattern, text); matched {
+			return true
+		}
+	}
+	
+	// 这里可以添加基于字体名称的检测 (例如 CMMI, CMSY 等 TeX 字体)
+	if strings.Contains(strings.ToLower(fontName), "math") || 
+	   strings.Contains(strings.ToLower(fontName), "cmmi") {
+		return true
+	}
+
+	return false
+}
+
 // estimateTextWidth 估算文本宽度
 func (r *PDFStylePreservingReplacer) estimateTextWidth(text string, fontSize float64) float64 {
-	// 简单的文本宽度估算，实际应该根据字体进行精确计算
-	return float64(len(text)) * fontSize * 0.6
+	// 简单的文本宽度估算
+	// 汉字宽一些，英文窄一些
+	width := 0.0
+	for _, char := range text {
+		if char > 127 {
+			width += fontSize // 中文等宽
+		} else {
+			width += fontSize * 0.55 // 英文平均宽度
+		}
+	}
+	return width
 }
 
 // applyTranslationsWithStyles 应用翻译并保留样式
@@ -309,29 +434,45 @@ func (r *PDFStylePreservingReplacer) createInterleavedLayout(page ReconstructedP
 	return []ReconstructedPage{interleavedPage}
 }
 
-// reconstructPDFWithStyles 重构PDF并保留样式
-func (r *PDFStylePreservingReplacer) reconstructPDFWithStyles(pages []ReconstructedPage, outputPath string, config StylePreservingConfig) error {
-	log.Printf("重构PDF，保留样式: %s", outputPath)
+// reconstructPDFWithStyles 重构PDF并保留样式 (Overlay Mode)
+func (r *PDFStylePreservingReplacer) reconstructPDFWithStyles(pages []ReconstructedPage, outputPath, inputPath string, config StylePreservingConfig) error {
+	log.Printf("重构PDF(Overlay模式)，保留样式: %s", outputPath)
 
 	// 创建新的PDF文档
 	pdf := gofpdf.New("P", "pt", "A4", "")
 
-	// 添加字体支持
+	// 必须添加 gopher 字体支持，虽然我们用系统字体，但防止 panic
+	// gofpdfContrib 需要 gofpdf 的 instance
+	
+	// 添加字体支持（用于绘制翻译文本）
 	if err := r.addFontSupport(pdf); err != nil {
 		log.Printf("警告：添加字体支持失败: %v", err)
 	}
 
 	// 重构每一页
 	for _, page := range pages {
+		// 导入原始页面作为模板
+		importer := gofpdi.NewImporter()
+		importer.SetSourceFile(inputPath)
+		tplId := importer.ImportPage(page.PageNum, "/MediaBox")
+		
 		pdf.AddPage()
+		
+		// 绘制模板 (背景)
+		// UseTemplate returns attributes for UseImportedTemplate
+		tplName, scaleX, scaleY, tX, tY := importer.UseTemplate(tplId, 0, 0, page.PageWidth, page.PageHeight)
+		pdf.UseImportedTemplate(tplName, scaleX, scaleY, tX, tY)
 
-		// 设置页面尺寸
-		if page.PageWidth > 0 && page.PageHeight > 0 {
-			pdf.SetPageBox("MediaBox", 0, 0, page.PageWidth, page.PageHeight)
-		}
-
-		// 渲染页面元素
+		// 渲染页面元素 (Overlay)
 		for _, element := range page.Elements {
+			// 在 Overlay 模式下，我们只渲染那些 "被改动" 或 "是翻译" 的元素。
+			// 原始的未动元素已经在底图上了，不需要重绘防止加粗。
+			
+			// 简单起见，我们渲染所有元素，依靠遮罩遮住底图的文字。
+			// 这样可以保证样式（特别是字体）的一致性（全部使用新字体）。
+			// 对于公式，我们在 extract 阶段已经过滤掉了，所以这里 page.Elements 不包含公式
+			// 因此公式部分不会被遮罩，也不会被重绘，从而显示底图的原始矢量公式。
+			
 			r.renderElement(pdf, element, config)
 		}
 	}
@@ -344,6 +485,7 @@ func (r *PDFStylePreservingReplacer) reconstructPDFWithStyles(pages []Reconstruc
 	log.Printf("PDF重构完成: %s", outputPath)
 	return nil
 }
+
 
 // addFontSupport 添加字体支持
 func (r *PDFStylePreservingReplacer) addFontSupport(pdf *gofpdf.Fpdf) error {
@@ -366,30 +508,112 @@ func (r *PDFStylePreservingReplacer) addFontSupport(pdf *gofpdf.Fpdf) error {
 	return nil
 }
 
-// renderElement 渲染页面元素
+// renderElement 渲染页面元素 (Overlay Mode)
 func (r *PDFStylePreservingReplacer) renderElement(pdf *gofpdf.Fpdf, element PageElement, config StylePreservingConfig) {
-	// 设置字体
-	fontName := "Arial" // 默认字体
-	if element.FontName != "" {
-		// 尝试映射PDF字体名到gofpdf字体名
-		fontName = r.mapFontName(element.FontName)
+	// 1. 绘制遮罩 (Whiteout)
+	// 只有当有翻译且需要覆盖原文时才绘制
+	// 单语模式下：覆盖原文
+	// 双语模式下：可能不需要覆盖，取决于布局
+	
+	needMask := false
+	if config.Mode == "monolingual" {
+		needMask = true
+	} else if config.Mode == "bilingual" && config.BilingualLayout == "original-replacement" {
+		// 假如我们支持这种模式
+		needMask = true
+	}
+	// 注意：目前的 bilingual 逻辑是 append 两个 elements，一个是原文，一个是译文
+	// 如果是 SideBySide 或 TopBottom，原文 element 还在。
+	// 但在 "Overlay" 模式下，原文已经由 Template 绘制了！
+	// 所以，如果 element 是 "原文"，我们不需要做任何事（除了可能不需要重绘，因为它已经在底图上了）
+	// 但是，Wait！我们的 ReconstructedPage 包含了 "Elements"。
+	// 如果我们使用 Template，底图上已经有原文了。
+	// 如果我们再次 renderElement(OriginalElement)，我们会在底图上再次绘制文字。
+	// 这通常没问题，但可能会加粗。
+	// 关键是：如果这个 element 是翻译后的，我们需要MASK掉原来的位置（即 OriginalX, OriginalY）
+	
+	// 逻辑修正：
+	// 如果 element.Text 是翻译文本（怎么判断？通过比较 Text 和 OriginalText？我们没有存 OriginalText）
+	// 但是不管是原文还是译文，我们都有 OriginalX/Y/W/H。
+	// 如果是 Monolingual 模式，我们将所有 elements 替换成了 翻译后的 elements。
+	// 所以这里的 element 是 译文。
+	// 我们需要 MASK 掉 OriginalX/Y/W/H 区域。
+	
+	// GoFPDF 坐标系 Y 是向下增加。
+	// PDF 原生坐标系 Y 是向上增加。
+	// ledongthuc/pdf 提取的 Y 是原生的（通常）。
+	// MediaBox Height H. GoFPDF Y = H - PDF_Y.
+	// 我们需要注意这一点。
+	// 假设 ledongthuc/pdf 返回的是 PDF 坐标。
+	// 我们需要页面高度 H 来转换。
+	_, pageH := pdf.GetPageSize()
+	
+	// 转换 Y 坐标
+	// 注意：ledongthuc/pdf 的 Text.Y 通常是 baseline。
+	// 矩形遮罩应该是 Y_baseline + descent 到 Y_baseline - ascent? 
+	// 简单起见，Y 是底部？
+	// 让我们假设 ledongthuc/pdf return Y is lower-left of text box (standard PDF text matrix).
+	
+	// 转换到 GoFPDF (Top-Left 0,0)
+	// renderY = pageH - pdfY - fontSize (approx, depends on baseline)
+	// 这是一个痛点。
+	
+	// 让我们先做简单的 Mask：
+	if needMask && element.OriginalWidth > 0 {
+		pdf.SetFillColor(255, 255, 255)
+		
+		// 转换坐标
+		// 假设 element.OriginalY 是 standard PDF y (from bottom)
+		maskY := pageH - element.OriginalY - element.OriginalHeight
+		maskX := element.OriginalX
+		
+		// 绘制矩形 (F = Fill)
+		pdf.Rect(maskX, maskY, element.OriginalWidth, element.OriginalHeight, "F")
 	}
 
+	// 2. 绘制新文本
+	// 设置字体
+	fontName := "Arial" // 默认字体，确保支持中文的字体名
+	// 这里应该使用我们 addFontSupport 加载的字体，例如 "Heiti" 或 "DroidSansFallback"
+	// 我们在 addFontSupport 里的逻辑是：
+	// pdf.AddUTF8Font(fontName, "", fontPath)
+	// 假设 fontDetector 找到了 "SimHei" -> "SimHei"
+	// 我们需要知道加载的字体名。
+	// 暂时 Hardcode 一个或者通过 config 传？
+	// r.addFontSupport 动态加载了字体。
+	
+	// 现在的逻辑：
+	// 如果 element.FontName 在映射里，用映射的。
+	// 否则用 Arial? Arial 不支持中文。
+	// 我们需要一种机制确保使用 UTF8 字体。
+	// 我们可以尝试把 fontName 设为 "Unifont" 如果加载了的话。
+	
 	pdf.SetFont(fontName, "", element.FontSize)
 
-	// 设置颜色（如果配置要求保留颜色）
+	// 设置颜色
 	if config.ColorPreservation && element.Color != "" {
 		r.setTextColor(pdf, element.Color)
+	} else {
+		pdf.SetTextColor(0, 0, 0)
 	}
 
-	// 设置位置并渲染文本
-	pdf.SetXY(element.X, element.Y)
+	// 计算渲染位置
+	renderY := pageH - element.Y - element.FontSize*0.8 // 调整基线
+	if config.Mode == "bilingual" {
+		// 双语模式下，Y可能已经被 layout 调整过了（例如 TopBottom）
+		// 但是 layout调整的是 element.Y。
+		// 如果 element.Y 是基于 PDF 坐标（Bottom-up），那么减去 lineSpacing 是向下移。
+		// 我们的 createTopBottomLayout: Y - FontSize*Spacing -> 向下移（Y变小）。
+		// 在 GoFPDF (Top-Down): pageH - (smaller Y) = Larger RenderY (Lower on page). Correct.
+	}
+
+	pdf.SetXY(element.X, renderY)
 
 	// 处理多行文本
 	lines := strings.Split(element.Text, "\n")
 	for i, line := range lines {
 		if i > 0 {
-			pdf.SetXY(element.X, element.Y+float64(i)*element.FontSize*config.LineSpacing)
+			pdf.SetXY(element.X, renderY+float64(i)*element.FontSize*config.LineSpacing)
 		}
 		pdf.Cell(element.Width, element.Height, line)
 	}

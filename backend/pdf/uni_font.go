@@ -62,46 +62,58 @@ func (cfm *UniFontManager) GetSystemUniFonts() []FontInfo {
 		{"Batang", "바탕", "batang.ttc", "", 12, false, "韩文바탕字体"},
 	}
 
-	fontsDir := getSystemFontsDir()
-	if fontsDir == "" {
-		return []FontInfo{} // 如果无法获取字体目录，返回空列表
-	}
-
+	fontDirs := getSystemFontDirs()
 	availableFonts := make([]FontInfo, 0)
-	for _, font := range fonts {
-		fontPath := filepath.Join(fontsDir, font.Filename)
-		if _, err := os.Stat(fontPath); err == nil {
-			font.Path = fontPath
-			availableFonts = append(availableFonts, font)
+	
+	for _, fontsDir := range fontDirs {
+		for _, font := range fonts {
+			// 如果已经找到该字体，跳过
+			found := false
+			for _, av := range availableFonts {
+				if av.Family == font.Family {
+					found = true
+					break
+				}
+			}
+			if found {
+				continue
+			}
+
+			fontPath := filepath.Join(fontsDir, font.Filename)
+			if _, err := os.Stat(fontPath); err == nil {
+				font.Path = fontPath
+				availableFonts = append(availableFonts, font)
+			}
 		}
 	}
 
 	return availableFonts
 }
 
-// getSystemFontsDir 获取系统字体目录
-func getSystemFontsDir() string {
+// getSystemFontDirs 获取系统字体目录列表
+func getSystemFontDirs() []string {
+	var dirs []string
 	switch runtime.GOOS {
 	case "windows":
-		return filepath.Join(os.Getenv("WINDIR"), "Fonts")
+		dirs = append(dirs, filepath.Join(os.Getenv("WINDIR"), "Fonts"))
 	case "darwin": // macOS
-		return "/System/Library/Fonts"
+		dirs = append(dirs, "/System/Library/Fonts")
+		dirs = append(dirs, "/Library/Fonts")
+		dirs = append(dirs, expandPath("~/Library/Fonts"))
 	case "linux":
-		// Linux 可能有多个字体目录，优先检查常见的
-		dirs := []string{
-			"/usr/share/fonts",
-			"/usr/local/share/fonts",
-			"/System/Library/Fonts", // 某些Linux发行版
-		}
-		for _, dir := range dirs {
-			if _, err := os.Stat(dir); err == nil {
-				return dir
-			}
-		}
-		return "/usr/share/fonts" // 默认返回
-	default:
-		return ""
+		dirs = append(dirs, "/usr/share/fonts")
+		dirs = append(dirs, "/usr/local/share/fonts")
+		dirs = append(dirs, expandPath("~/.fonts"))
 	}
+	return dirs
+}
+
+func expandPath(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		dirname, _ := os.UserHomeDir()
+		return filepath.Join(dirname, path[2:])
+	}
+	return path
 }
 
 // LoadFont 加载字体
@@ -269,18 +281,20 @@ func (cfh *UniFontHelper) EnsureUniFontLoaded() error {
 		{"Batang", "batang.ttc"},
 	}
 
-	fontsDir := getSystemFontsDir()
-	if fontsDir == "" {
+	fontDirs := getSystemFontDirs()
+	if len(fontDirs) == 0 {
 		return fmt.Errorf("无法获取系统字体目录")
 	}
 
-	for _, font := range fonts {
-		fontPath := filepath.Join(fontsDir, font.filename)
-		if _, err := os.Stat(fontPath); err == nil {
-			if err := cfh.pdf.AddTTFFont(font.family, fontPath); err == nil {
-				cfh.fontFamily = font.family
-				cfh.fontLoaded = true
-				return nil
+	for _, fontDir := range fontDirs {
+		for _, font := range fonts {
+			fontPath := filepath.Join(fontDir, font.filename)
+			if _, err := os.Stat(fontPath); err == nil {
+				if err := cfh.pdf.AddTTFFont(font.family, fontPath); err == nil {
+					cfh.fontFamily = font.family
+					cfh.fontLoaded = true
+					return nil
+				}
 			}
 		}
 	}

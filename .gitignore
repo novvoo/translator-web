@@ -73,8 +73,8 @@ tmp/
 temp/
 *.tmp
 *.exe
-demo/cache/
-demo/logs/
-demo/output/
-demo/*.txt
-demo/*.md
+*/demo/cache/
+*/demo/logs/
+*/demo/output/
+*/demo/*.txt
+*/demo/*.md

@@ -19,15 +19,17 @@ import (
 
 // PDFFlowProcessor PDF流处理器 - 基于临时目录的动态PDF重建
 type PDFFlowProcessor struct {
-	workDir     string
-	inputPath   string
-	outputPath  string
-	flowData    *PDFFlowData
-	fontManager *FontManager
-	uniFontMgr  *pdf.UniFontManager // 添加通用字体管理器
-	logger      *PDFLogger
-	sessionID   string
-	UniFontName string // 添加通用字体名称字段
+	workDir      string
+	inputPath    string
+	outputPath   string
+	flowData     *PDFFlowData
+	fontManager  *FontManager
+	uniFontMgr   *pdf.UniFontManager // 添加通用字体管理器
+	logger       *PDFLogger
+	sessionID    string
+	UniFontName  string            // 添加通用字体名称字段
+	imageDir     string            // 图片临时目录
+	imageMapping map[string]string // 图片名称到文件路径的映射
 }
 
 // PDFFlowData PDF流数据结构
@@ -91,6 +93,7 @@ type TextElementFlow struct {
 	Confidence   float64         `json:"confidence"`
 	OriginalOps  []string        `json:"original_ops"`
 	Dependencies []string        `json:"dependencies"`
+	OriginalBoundingBox BoundingBox `json:"original_bounding_box"`
 }
 
 // PositionFlow 位置流信息
@@ -381,6 +384,12 @@ func NewPDFFlowProcessor(inputPath, outputPath string) (*PDFFlowProcessor, error
 		return nil, fmt.Errorf("创建工作目录失败: %w", err)
 	}
 
+	// 创建图片临时目录
+	imageDir := filepath.Join(workDir, "images")
+	if err := os.MkdirAll(imageDir, 0755); err != nil {
+		return nil, fmt.Errorf("创建图片目录失败: %w", err)
+	}
+
 	// 生成会话ID
 	// sessionID := fmt.Sprintf("session_%d", time.Now().Unix()) // 已在上面生成
 
@@ -391,12 +400,14 @@ func NewPDFFlowProcessor(inputPath, outputPath string) (*PDFFlowProcessor, error
 	}
 
 	processor := &PDFFlowProcessor{
-		workDir:     workDir,
-		inputPath:   inputPath,
-		outputPath:  outputPath,
-		fontManager: NewFontManager(),
-		logger:      logger,
-		sessionID:   sessionID,
+		workDir:      workDir,
+		inputPath:    inputPath,
+		outputPath:   outputPath,
+		fontManager:  NewFontManager(),
+		logger:       logger,
+		sessionID:    sessionID,
+		imageDir:     imageDir,
+		imageMapping: make(map[string]string),
 	}
 
 	// 记录初始化信息
@@ -404,6 +415,7 @@ func NewPDFFlowProcessor(inputPath, outputPath string) (*PDFFlowProcessor, error
 		"输入文件": inputPath,
 		"输出文件": outputPath,
 		"工作目录": workDir,
+		"图片目录": imageDir,
 		"会话ID": sessionID,
 		"日志文件": logger.GetLogFilePath(),
 	})
@@ -443,13 +455,21 @@ func (p *PDFFlowProcessor) ProcessPDF() error {
 		return fmt.Errorf("解析PDF结构失败: %w", err)
 	}
 
-	// 2. 保存流数据到临时目录
+	// 2. 提取图片资源
+	if err := p.extractImages(); err != nil {
+		p.logger.Warn("提取图片失败", map[string]interface{}{
+			"错误": err.Error(),
+		})
+		// 图片提取失败不应该中断整个流程，继续处理
+	}
+
+	// 3. 保存流数据到临时目录
 	if err := p.saveFlowData(); err != nil {
 		p.logger.LogError("保存流数据", err, nil)
 		return fmt.Errorf("保存流数据失败: %w", err)
 	}
 
-	// 3. 提取资源文件
+	// 4. 提取资源文件
 	if err := p.extractResources(); err != nil {
 		p.logger.LogError("提取资源文件", err, nil)
 		return fmt.Errorf("提取资源文件失败: %w", err)
@@ -518,6 +538,7 @@ func (p *PDFFlowProcessor) ApplyTranslations(translations map[string]string) err
 				// 记录翻译前的状态
 				originalContent := element.Content
 				originalBounds := element.BoundingBox
+				element.OriginalBoundingBox = originalBounds
 
 				// 计算新文本的尺寸
 				newBounds, err := p.calculateTextBounds(translation, element.Font)
@@ -1639,9 +1660,38 @@ func (p *PDFFlowProcessor) parseContentElements(pageFlow *PDFPageFlow) error {
 	currentFont := FontFlow{Name: "default", Size: 12}
 	currentColor := ColorFlow{Space: "RGB", Values: []float64{0, 0, 0}, Alpha: 1.0}
 
+	// 状态栈
+	type State struct {
+		Transform TransformMatrix
+		TextState TextStateFlow
+		Font      FontFlow
+		Color     ColorFlow
+	}
+	stateStack := make([]State, 0)
+
 	for _, stream := range pageFlow.ContentStreams {
 		for _, op := range stream.ParsedOps {
 			switch op.Operator {
+			case "q":
+				// 保存图形状态
+				stateStack = append(stateStack, State{
+					Transform: currentTransform,
+					TextState: currentTextState,
+					Font:      currentFont,
+					Color:     currentColor,
+				})
+
+			case "Q":
+				// 恢复图形状态
+				if len(stateStack) > 0 {
+					state := stateStack[len(stateStack)-1]
+					stateStack = stateStack[:len(stateStack)-1]
+					currentTransform = state.Transform
+					currentTextState = state.TextState
+					currentFont = state.Font
+					currentColor = state.Color
+				}
+
 			case "Tj", "TJ", "'", "\"":
 				// 文本显示操作符
 				element, err := p.parseTextElement(op, textElementID, currentTransform, currentTextState, currentFont, currentColor)
@@ -1681,7 +1731,9 @@ func (p *PDFFlowProcessor) parseContentElements(pageFlow *PDFPageFlow) error {
 			case "cm":
 				// 变换矩阵
 				if len(op.Operands) >= 6 {
-					currentTransform = p.parseTransformMatrix(op.Operands)
+					newMatrix := p.parseTransformMatrix(op.Operands)
+					// p.logger.Log("DEBUG", fmt.Sprintf("Matrix multiply: %v * %v", newMatrix, currentTransform))
+					currentTransform = p.multiplyMatrices(newMatrix, currentTransform)
 				}
 
 			case "Tf":
@@ -2537,6 +2589,18 @@ func (p *PDFFlowProcessor) parseTransformMatrix(operands []string) TransformMatr
 	return TransformMatrix{A: a, B: b, C: c, D: d, E: e, F: f}
 }
 
+// multiplyMatrices 矩阵乘法: result = m1 * m2
+func (p *PDFFlowProcessor) multiplyMatrices(m1, m2 TransformMatrix) TransformMatrix {
+	return TransformMatrix{
+		A: m1.A*m2.A + m1.B*m2.C,
+		B: m1.A*m2.B + m1.B*m2.D,
+		C: m1.C*m2.A + m1.D*m2.C,
+		D: m1.C*m2.B + m1.D*m2.D,
+		E: m1.E*m2.A + m1.F*m2.C + m2.E,
+		F: m1.E*m2.B + m1.F*m2.D + m2.F,
+	}
+}
+
 // parseFloat 解析浮点数
 func (p *PDFFlowProcessor) parseFloat(s string) (float64, error) {
 	// 移除可能的括号和其他字符
@@ -2725,14 +2789,67 @@ func (p *PDFFlowProcessor) extractResources() error {
 		return fmt.Errorf("创建资源目录失败: %w", err)
 	}
 
-	// 这里可以提取字体、图像等资源文件到临时目录
-	// 简化实现，实际需要从PDF中提取嵌入的资源
+	// 使用pdfcpu提取所有图像
+	// 注意：ExtractImagesFile 会提取所有页面的图像
+	p.logger.Info("开始提取图像资源", map[string]interface{}{
+		"资源目录": resourcesDir,
+	})
+
+	// 使用 pdfcpu 提取图像
+	// 第三个参数为 nil 表示提取所有页面
+	// 第四个参数为 nil 表示使用默认配置
+	if err := api.ExtractImagesFile(p.inputPath, resourcesDir, nil, nil); err != nil {
+		// 某些PDF可能提取失败，记录警告但不中断
+		p.logger.Warn("提取图像失败", map[string]interface{}{
+			"错误": err.Error(),
+		})
+	}
+
+	// 遍历资源目录，建立映射关系
+	files, err := os.ReadDir(resourcesDir)
+	if err != nil {
+		return fmt.Errorf("读取资源目录失败: %w", err)
+	}
+
+	mappedCount := 0
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+
+		fileName := file.Name()
+		filePath := filepath.Join(resourcesDir, fileName)
+		
+		// pdfcpu 提取的文件名通常格式为: page_页码_对象ID_名称.ext 或 page_页码_名称.ext
+		// 我们尝试匹配名称部分
+		
+		// 将提取的图像添加到 Resources.Images
+		// 简单的匹配策略：如果资源名包含在文件名中
+		for name, imgRes := range p.flowData.Resources.Images {
+			// 移除名称前的 / (如果存在)
+			cleanName := strings.TrimPrefix(name, "/")
+			
+			// 检查文件名是否包含此名称 (忽略大小写)
+			if strings.Contains(strings.ToLower(fileName), strings.ToLower(cleanName)) {
+				imgRes.FilePath = filePath
+				p.flowData.Resources.Images[name] = imgRes
+				mappedCount++
+				
+				p.logger.Debug("关联图像资源", map[string]interface{}{
+					"资源名": name,
+					"文件": fileName,
+				})
+			}
+		}
+	}
 
 	duration := time.Since(startTime)
 	p.logger.LogOperationTiming("提取资源文件", duration)
 
 	p.logger.Info("资源文件提取完成", map[string]interface{}{
 		"资源目录": resourcesDir,
+		"提取文件数": len(files),
+		"关联资源数": mappedCount,
 		"耗时":   duration.String(),
 	})
 
@@ -3420,7 +3537,76 @@ func (p *PDFFlowProcessor) renderImageElement(pdf *gofpdf.Fpdf, element ImageEle
 		"高度":   element.Size.Height,
 	})
 
+	// 获取图片文件路径
+	imagePath, exists := p.getImagePath(element.Name)
+	if !exists {
+		p.logger.Warn("未找到图片文件", map[string]interface{}{
+			"图像名称": element.Name,
+		})
+		// 绘制占位框
+		return p.renderImagePlaceholder(pdf, element)
+	}
+
+	// 检查文件是否存在
+	if _, err := os.Stat(imagePath); os.IsNotExist(err) {
+		p.logger.Warn("图片文件不存在", map[string]interface{}{
+			"图像名称": element.Name,
+			"文件路径": imagePath,
+		})
+		return p.renderImagePlaceholder(pdf, element)
+	}
+
 	// 确保图像有合理的尺寸
+	width := element.Size.Width
+	height := element.Size.Height
+
+	if width <= 0 {
+		width = 100
+	}
+	if height <= 0 {
+		height = 100
+	}
+
+	// 限制最大尺寸，避免图像过大
+	maxWidth := 500.0
+	maxHeight := 700.0
+
+	if width > maxWidth {
+		height = height * (maxWidth / width)
+		width = maxWidth
+	}
+	if height > maxHeight {
+		width = width * (maxHeight / height)
+		height = maxHeight
+	}
+
+	// 确保位置在合理范围内
+	posX := element.Position.X
+	posY := element.Position.Y
+
+	if posX < 0 {
+		posX = 50
+	}
+	if posY < 0 {
+		posY = 50
+	}
+
+	// 使用gofpdf的Image方法嵌入图片
+	// 参数：文件路径, X坐标, Y坐标, 宽度, 高度, 是否流式, 图片类型(自动检测), 链接, 链接目标
+	pdf.Image(imagePath, posX, posY, width, height, false, "", 0, "")
+
+	p.logger.Debug("图片渲染成功", map[string]interface{}{
+		"图像名称": element.Name,
+		"文件路径": imagePath,
+		"位置":    fmt.Sprintf("(%.1f, %.1f)", posX, posY),
+		"尺寸":    fmt.Sprintf("%.1f x %.1f", width, height),
+	})
+
+	return nil
+}
+
+// renderImagePlaceholder 渲染图片占位框（当图片不可用时）
+func (p *PDFFlowProcessor) renderImagePlaceholder(pdf *gofpdf.Fpdf, element ImageElementFlow) error {
 	width := element.Size.Width
 	height := element.Size.Height
 
@@ -3431,7 +3617,7 @@ func (p *PDFFlowProcessor) renderImageElement(pdf *gofpdf.Fpdf, element ImageEle
 		height = 50
 	}
 
-	// 限制最大尺寸，避免图像过大
+	// 限制最大尺寸
 	maxWidth := 200.0
 	maxHeight := 200.0
 
@@ -3444,7 +3630,7 @@ func (p *PDFFlowProcessor) renderImageElement(pdf *gofpdf.Fpdf, element ImageEle
 		height = maxHeight
 	}
 
-	// 简化实现：添加占位符文本表示图像
+	// 绘制占位框
 	if width > 10 && height > 10 {
 		// 设置边框颜色
 		pdf.SetDrawColor(200, 200, 200)
@@ -3822,4 +4008,180 @@ func (p *PDFFlowProcessor) needsSeparator(a, b string) bool {
 
 	// 其他情况需要空格分隔符
 	return true
+}
+
+// extractImages 提取PDF中的所有图片
+func (p *PDFFlowProcessor) extractImages() error {
+	startTime := time.Now()
+	p.logger.Info("开始提取图片", map[string]interface{}{
+		"输入文件": p.inputPath,
+		"图片目录": p.imageDir,
+	})
+
+	// 方法1：尝试使用pdfcpu的标准API
+	err := api.ExtractImagesFile(p.inputPath, p.imageDir, nil, nil)
+	if err != nil {
+		p.logger.Warn("标准API提取图片失败，尝试自定义提取器", map[string]interface{}{
+			"错误": err.Error(),
+		})
+
+		// 方法2：使用自定义图片提取器
+		extractor, err := NewPDFImageExtractor(p.inputPath, p.imageDir, p.logger)
+		if err != nil {
+			p.logger.LogError("创建图片提取器失败", err, nil)
+			return fmt.Errorf("创建图片提取器失败: %w", err)
+		}
+
+		imageMapping, err := extractor.ExtractAllImages()
+		if err != nil {
+			p.logger.LogError("自定义提取器提取图片失败", err, nil)
+			return fmt.Errorf("提取图片失败: %w", err)
+		}
+
+		// 直接使用提取器返回的映射
+		p.imageMapping = imageMapping
+	} else {
+		// 标准API成功，建立图片映射
+		if err := p.mapImageResources(); err != nil {
+			p.logger.LogError("建立图片映射失败", err, nil)
+			return fmt.Errorf("建立图片映射失败: %w", err)
+		}
+	}
+
+	duration := time.Since(startTime)
+	p.logger.LogOperationTiming("提取图片", duration, map[string]interface{}{
+		"图片数量": len(p.imageMapping),
+	})
+
+	p.logger.Info("图片提取完成", map[string]interface{}{
+		"图片数量": len(p.imageMapping),
+		"耗时":   duration.String(),
+	})
+
+	return nil
+}
+
+// mapImageResources 建立图片资源映射
+func (p *PDFFlowProcessor) mapImageResources() error {
+	p.logger.Info("开始建立图片映射", map[string]interface{}{
+		"图片目录": p.imageDir,
+	})
+
+	// 读取图片目录中的所有文件
+	entries, err := os.ReadDir(p.imageDir)
+	if err != nil {
+		return fmt.Errorf("读取图片目录失败: %w", err)
+	}
+
+	imageCount := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		fileName := entry.Name()
+		filePath := filepath.Join(p.imageDir, fileName)
+
+		// 检查文件是否为图片格式
+		ext := strings.ToLower(filepath.Ext(fileName))
+		if !p.isImageFile(ext) {
+			p.logger.Debug("跳过非图片文件", map[string]interface{}{
+				"文件名": fileName,
+				"扩展名": ext,
+			})
+			continue
+		}
+
+		// 获取文件信息
+		fileInfo, err := entry.Info()
+		if err != nil {
+			p.logger.Warn("获取文件信息失败", map[string]interface{}{
+				"文件名": fileName,
+				"错误":  err.Error(),
+			})
+			continue
+		}
+
+		// 建立映射：使用文件名（不含扩展名）作为键
+		// 这样可以匹配PDF中的图片引用名称
+		baseName := strings.TrimSuffix(fileName, ext)
+		p.imageMapping[baseName] = filePath
+		p.imageMapping[fileName] = filePath // 同时保存完整文件名的映射
+
+		// 更新流数据中的图片资源信息
+		if p.flowData != nil && p.flowData.Resources.Images != nil {
+			p.flowData.Resources.Images[baseName] = ImageResource{
+				Name:     baseName,
+				FilePath: filePath,
+				Width:    0, // 实际宽度需要从图片文件读取
+				Height:   0, // 实际高度需要从图片文件读取
+			}
+		}
+
+		imageCount++
+
+		p.logger.Debug("添加图片映射", map[string]interface{}{
+			"图片名称": baseName,
+			"文件路径": filePath,
+			"文件大小": p.logger.formatBytes(fileInfo.Size()),
+		})
+	}
+
+	p.logger.Info("图片映射建立完成", map[string]interface{}{
+		"图片数量": imageCount,
+		"映射数量": len(p.imageMapping),
+	})
+
+	return nil
+}
+
+// isImageFile 检查文件扩展名是否为图片格式
+func (p *PDFFlowProcessor) isImageFile(ext string) bool {
+	imageExts := map[string]bool{
+		".jpg":  true,
+		".jpeg": true,
+		".png":  true,
+		".gif":  true,
+		".bmp":  true,
+		".tiff": true,
+		".tif":  true,
+		".webp": true,
+	}
+	return imageExts[ext]
+}
+
+// getImagePath 根据图片名称获取图片文件路径
+func (p *PDFFlowProcessor) getImagePath(imageName string) (string, bool) {
+	// 清理图片名称（移除可能的前缀和后缀）
+	imageName = strings.TrimSpace(imageName)
+	imageName = strings.TrimPrefix(imageName, "/")
+	imageName = strings.TrimPrefix(imageName, "Im")
+	imageName = strings.TrimPrefix(imageName, "I")
+
+	// 尝试直接查找
+	if path, exists := p.imageMapping[imageName]; exists {
+		return path, true
+	}
+
+	// 尝试添加常见的图片扩展名
+	exts := []string{".jpg", ".jpeg", ".png", ".gif"}
+	for _, ext := range exts {
+		if path, exists := p.imageMapping[imageName+ext]; exists {
+			return path, true
+		}
+	}
+
+	// 尝试模糊匹配
+	for key, path := range p.imageMapping {
+		if strings.Contains(key, imageName) || strings.Contains(imageName, key) {
+			p.logger.Debug("使用模糊匹配找到图片", map[string]interface{}{
+				"查询名称": imageName,
+				"匹配键":  key,
+				"文件路径": path,
+			})
+			return path, true
+		}
+	}
+
+	return "", false
 }

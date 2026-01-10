@@ -148,14 +148,21 @@ func (pmt *PDFMathTranslator) TranslatePDF(inputPath, outputDir string, config P
 	var monoFile, dualFile string
 
 	if config.GenerateMode == "monolingual" {
-		// 单语模式：只生成单语PDF - 使用文本替换保留样式
+		// 单语模式：只生成单语PDF - 使用样式保留替换器 (Overlay技术)
 		monoFile = filepath.Join(outputDir, filename+"-mono.pdf")
-		if err := pdfDoc.SaveMonolingualPDFWithReplacement(monoFile, translationMap); err != nil {
+		
+		replacer := NewPDFStylePreservingReplacer()
+		styleConfig := GetDefaultStylePreservingConfig()
+		// 可以根据 config 调整 styleConfig
+		
+		if err := replacer.ReplaceWithStylePreservation(inputPath, monoFile, translationMap, styleConfig); err != nil {
 			return nil, fmt.Errorf("生成单语PDF失败: %w", err)
 		}
 		log.Printf("单语模式：生成单语PDF: %s", monoFile)
 	} else {
-		// 双语模式（默认）：生成双语PDF，可选生成单语PDF - 使用文本替换保留样式
+		// 双语模式（默认）：生成双语PDF，可选生成单语PDF
+		// 对于双语，目前保留原有逻辑或也切换到 Replacer (如果支持)
+		// Replacer 目前主要优化了 Overlay (单语)
 		dualFile = filepath.Join(outputDir, filename+"-dual.pdf")
 		if err := pdfDoc.SaveBilingualPDFWithReplacement(dualFile, translationMap, BilingualLayoutTopBottom); err != nil {
 			return nil, fmt.Errorf("生成双语PDF失败: %w", err)
@@ -163,7 +170,11 @@ func (pmt *PDFMathTranslator) TranslatePDF(inputPath, outputDir string, config P
 
 		// 也生成单语版本作为备选
 		monoFile = filepath.Join(outputDir, filename+"-mono.pdf")
-		if err := pdfDoc.SaveMonolingualPDFWithReplacement(monoFile, translationMap); err != nil {
+		
+		replacer := NewPDFStylePreservingReplacer()
+		styleConfig := GetDefaultStylePreservingConfig()
+		
+		if err := replacer.ReplaceWithStylePreservation(inputPath, monoFile, translationMap, styleConfig); err != nil {
 			log.Printf("警告：生成单语PDF失败: %v", err)
 			// 双语模式下，单语PDF失败不应该导致整个任务失败
 		}
